@@ -4,20 +4,22 @@
  * リンク切れを記録する。
  *
  * 使い方:
- *   node src/crawl.js before   # アップデート前
- *   node src/crawl.js after    # アップデート後
+ *   node src/crawl.js before [対象名]   # アップデート前
+ *   node src/crawl.js after  [対象名]   # アップデート後
  */
 
 import { chromium } from "playwright";
 import fs from "fs";
 import path from "path";
-import { config } from "../config.js";
+import { resolveTarget } from "./target.js";
 
 const phase = process.argv[2];
 if (!["before", "after"].includes(phase)) {
-  console.error("Usage: node src/crawl.js [before|after]");
+  console.error("Usage: node src/crawl.js [before|after] [対象名]");
   process.exit(1);
 }
+
+const config = resolveTarget(process.argv[3]);
 
 const ssDir = path.join(config.reportDir, phase, "screenshots");
 const dataFile = path.join(config.reportDir, phase, "results.json");
@@ -50,7 +52,7 @@ function isSameDomain(url) {
 }
 
 async function crawl() {
-  console.log(`\n🚀 クロール開始 [${phase}] - ${config.baseUrl}\n`);
+  console.log(`\n🚀 クロール開始 [${config.name}/${phase}] - ${config.baseUrl}\n`);
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({

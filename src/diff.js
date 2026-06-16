@@ -4,14 +4,16 @@
  * HTMLレポートを生成する。
  *
  * 使い方:
- *   node src/diff.js
+ *   node src/diff.js [対象名]
  */
 
 import fs from "fs";
 import path from "path";
 import { PNG } from "pngjs";
 import pixelmatch from "pixelmatch";
-import { config } from "../config.js";
+import { resolveTarget } from "./target.js";
+
+const config = resolveTarget(process.argv[2]);
 
 const beforeDir = path.join(config.reportDir, "before", "screenshots");
 const afterDir = path.join(config.reportDir, "after", "screenshots");
@@ -188,9 +190,10 @@ async function generateReport() {
   // HTMLレポート生成
   const reportPath = path.join(config.reportDir, "report.html");
 
-  const relBefore = "../before/screenshots/";
-  const relAfter = "../after/screenshots/";
-  const relDiff = "../diff/";
+  // report.html は reportDir 直下、SS は reportDir/before|after|diff にあるので相対パスは "./"
+  const relBefore = "./before/screenshots/";
+  const relAfter = "./after/screenshots/";
+  const relDiff = "./diff/";
 
   const html = `<!DOCTYPE html>
 <html lang="ja">

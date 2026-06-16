@@ -41,20 +41,29 @@ cp config.sample.js config.js
 
 ```js
 export const config = {
-  baseUrl: "https://your-staging-site.example.com",  // ← チェック対象URL
-  basicAuth: null,  // Basic認証がある場合は { username: "user", password: "pass" }
+  // 共通設定
   concurrency: 2,   // 同時実行数（サーバー負荷を考えて1〜3推奨）
-  ...
+  diffThreshold: 0.01,
+  // ...
+
+  // チェック対象（複数定義可）
+  targets: [
+    { name: "siteA", baseUrl: "https://staging-a.example.com", basicAuth: null },
+    { name: "siteB", baseUrl: "https://staging-b.example.com", basicAuth: { username: "u", password: "p" } },
+  ],
 };
 ```
+
+各対象に `name` を付けて配列で複数定義できます。実行時に `-- <name>` で対象を切り替えます。
+**対象が1つだけなら名前は省略可**、複数あって未指定の場合はエラーで一覧を表示します。
 
 ### 2. アップデート前にクロール
 
 ```bash
-npm run before
+npm run before -- siteA
 ```
 
-→ `reports/before/` にスクリーンショット＋結果JSONが保存される
+→ `reports/siteA/before/` にスクリーンショット＋結果JSONが保存される
 
 ### 3. WordPressをアップデート
 
@@ -63,23 +72,25 @@ npm run before
 ### 4. アップデート後にクロール＋レポート生成
 
 ```bash
-npm run after   # アップデート後のクロール
-npm run diff    # レポート生成
+npm run after -- siteA   # アップデート後のクロール
+npm run diff  -- siteA   # レポート生成
 ```
 
 または一括実行：
 
 ```bash
-npm run check   # after + diff を連続実行
+npm run check -- siteA   # after + diff を連続実行
 ```
+
+> `npm run` に引数を渡すときは `--` が必要です（例: `npm run before -- siteA`）。
 
 ### 5. レポートを確認
 
 ```
-reports/report.html
+reports/siteA/report.html
 ```
 
-ブラウザで開くと差分サムネイル付きの一覧が見られます。
+対象ごとに `reports/<name>/` 配下へ分かれて出力されます。ブラウザで開くと差分サムネイル付きの一覧が見られます。
 
 ---
 
@@ -92,16 +103,19 @@ wp-checker/
 ├── package.json
 ├── src/
 │   ├── crawl.js       # クロール・SS撮影・リンクチェック
-│   └── diff.js        # 差分比較・レポート生成
+│   ├── diff.js        # 差分比較・レポート生成
+│   ├── check.js       # after + diff を対象名を引き継いで連続実行
+│   └── target.js      # 実行時引数から対象を解決（共通設定とマージ）
 └── reports/
-    ├── before/
-    │   ├── screenshots/   # アプデ前のSS
-    │   └── results.json   # クロール結果
-    ├── after/
-    │   ├── screenshots/   # アプデ後のSS
-    │   └── results.json
-    ├── diff/              # 差分ハイライト画像
-    └── report.html        # ← 最終レポート
+    └── <対象名>/           # 対象（target.name）ごとに分離
+        ├── before/
+        │   ├── screenshots/   # アプデ前のSS
+        │   └── results.json   # クロール結果
+        ├── after/
+        │   ├── screenshots/   # アプデ後のSS
+        │   └── results.json
+        ├── diff/              # 差分ハイライト画像
+        └── report.html        # ← 最終レポート
 ```
 
 ---

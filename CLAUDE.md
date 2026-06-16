@@ -24,12 +24,15 @@ wp-checker/
 ├── package.json
 ├── src/
 │   ├── crawl.js       # サイトを再帰クロールし、各ページのSS撮影＋リンク切れ記録
-│   └── diff.js        # before/after のSSを比較しHTMLレポート生成
+│   ├── diff.js        # before/after のSSを比較しHTMLレポート生成
+│   ├── check.js       # after → diff を対象名を引き継いで連続実行
+│   └── target.js      # 実行時引数から対象を解決し共通設定とマージ
 └── reports/           # 実行時に生成（gitignore対象）
-    ├── before/{screenshots/, results.json}
-    ├── after/{screenshots/, results.json}
-    ├── diff/          # 差分ハイライト画像
-    └── report.html    # 最終レポート
+    └── <対象名>/        # config.targets[].name ごとに分離
+        ├── before/{screenshots/, results.json}
+        ├── after/{screenshots/, results.json}
+        ├── diff/      # 差分ハイライト画像
+        └── report.html  # 最終レポート
 ```
 
 ## 開発コマンド
@@ -38,17 +41,20 @@ wp-checker/
 npm install
 npx playwright install chromium   # 初回のみ
 
-npm run before   # アップデート前にクロール → reports/before/
+# <name> は config.targets[].name。対象が1つなら省略可、複数なら必須。
+npm run before -- <name>   # アップデート前にクロール → reports/<name>/before/
 # （ここで WordPress をアップデート）
-npm run after    # アップデート後にクロール → reports/after/
-npm run diff     # 差分比較＋レポート生成 → reports/report.html
-npm run check    # after + diff を連続実行
+npm run after  -- <name>   # アップデート後にクロール → reports/<name>/after/
+npm run diff   -- <name>   # 差分比較＋レポート生成 → reports/<name>/report.html
+npm run check  -- <name>   # after + diff を連続実行
 ```
 
 ## 設計メモ
 
-- `crawl.js`: `config.baseUrl` を起点に BFS でクロール。`config.concurrency` 件ずつ並列処理。`excludePatterns`（正規表現）と `stayOnDomain` で対象を絞る。リンク切れはページ内で `fetch(HEAD)` を実行しステータス判定。結果は各フェーズの `results.json` に保存。
-- `diff.js`: before/after を URL でマッチング。SS はサイズが違う場合は大きい方に白埋めリサイズしてから pixelmatch で比較。`config.diffThreshold` を超えた差分のみ diff 画像を出力。ビジュアル差分 / リンク切れ / ステータス変化 / 新規・削除ページを分類して単一 HTML に出力。
+- **複数対象**: `config.targets[]` に `{ name, baseUrl, basicAuth, ...上書き }` を並べる。`src/target.js` の `resolveTarget(name)` が実行時引数から対象を選び、共通設定（concurrency / timeout / diffThreshold / viewport / excludePatterns / stayOnDomain / userAgent）とマージして返す。`reportDir` は `reports/<name>` に解決され、対象ごとにレポートが分離される。対象が複数あるのに名前未指定だとエラーで一覧を出す。
+- `crawl.js`: 引数 `[before|after] [対象名]`。解決済み `baseUrl` を起点に BFS でクロール、`concurrency` 件ずつ並列。`excludePatterns`（正規表現）と `stayOnDomain` で対象を絞る。リンク切れはページ内で `fetch(HEAD)` を実行しステータス判定。結果は各フェーズの `results.json` に保存。
+- `diff.js`: 引数 `[対象名]`。before/after を URL でマッチング。SS はサイズが違う場合は大きい方に白埋めリサイズしてから pixelmatch で比較。`diffThreshold` を超えた差分のみ diff 画像を出力。`report.html` は `reportDir` 直下に置き、SS への相対パスは `./before|after|diff/`（report.html と同階層）。ビジュアル差分 / リンク切れ / ステータス変化 / 新規・削除ページを分類して単一 HTML に出力。
+- `check.js`: `spawnSync` で after → diff を順に呼び、対象名引数をそのまま引き継ぐ（npm の `--` 経由だと両方に引数が渡らない問題を回避するため）。
 
 ## 注意点 / TODO
 

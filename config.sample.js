@@ -6,12 +6,7 @@
 // =============================================
 
 export const config = {
-  // チェック対象のサイトURL（末尾スラッシュなし）
-  baseUrl: "https://your-staging-site.example.com",
-
-  // Basic認証が必要な場合（不要なら null のまま）
-  basicAuth: null,
-  // basicAuth: { username: "user", password: "pass" },
+  // ---- 共通設定（全対象で共有） ----
 
   // クロールの同時実行数（サーバー負荷を考慮して 1〜3 推奨）
   concurrency: 2,
@@ -41,6 +36,24 @@ export const config = {
   // クローラーのUser-Agent
   userAgent: "wp-checker-bot/1.0 (regression testing)",
 
-  // レポートの出力先
+  // レポートの出力先（この下に対象名ごとのサブフォルダが作られる）
   reportDir: "./reports",
+
+  // ---- チェック対象（複数定義可） ----
+  // name で実行時に切り替える:  npm run before -- <name>
+  // 対象が1つだけなら name 省略可。複数ある場合は名前指定が必須。
+  // basicAuth / concurrency など共通設定は対象ごとに上書き可能。
+  targets: [
+    {
+      name: "example",
+      baseUrl: "https://your-staging-site.example.com",  // 末尾スラッシュなし
+      basicAuth: null,  // Basic認証がある場合は { username: "user", password: "pass" }
+    },
+    // {
+    //   name: "another",
+    //   baseUrl: "https://another-staging.example.com",
+    //   basicAuth: { username: "user", password: "pass" },
+    //   // concurrency: 1,  // ← この対象だけ上書きしたい場合
+    // },
+  ],
 };
