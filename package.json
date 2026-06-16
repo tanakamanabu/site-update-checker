@@ -1,0 +1,17 @@
+{
+  "name": "wp-checker",
+  "version": "1.0.0",
+  "description": "WordPress update regression checker - visual diff + broken link detection",
+  "type": "module",
+  "scripts": {
+    "before": "node src/crawl.js before",
+    "after": "node src/crawl.js after",
+    "diff": "node src/diff.js",
+    "check": "npm run after && npm run diff"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0",
+    "pixelmatch": "^6.0.0",
+    "pngjs": "^7.0.0"
+  }
+}
