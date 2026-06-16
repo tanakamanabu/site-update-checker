@@ -9,7 +9,23 @@
  */
 
 import path from "path";
-import { config } from "../config.js";
+import fs from "fs";
+import { fileURLToPath } from "url";
+
+// config.js は .gitignore 済みで存在しないことがある。静的 import だと
+// 「モジュールが見つからない」という分かりにくいエラーで落ちるので、
+// 動的 import して不在時はセットアップ手順を案内する。
+async function loadConfig() {
+  const configPath = fileURLToPath(new URL("../config.js", import.meta.url));
+  if (!fs.existsSync(configPath)) {
+    console.error("❌ config.js が見つかりません。");
+    console.error("   初回セットアップ: cp config.sample.js config.js");
+    console.error("   その後 config.js の baseUrl を対象サイトに書き換えてください。");
+    process.exit(1);
+  }
+  const mod = await import(new URL("../config.js", import.meta.url));
+  return mod.config;
+}
 
 // 共通設定として扱うキー（targets[] 側で同名キーがあれば上書きされる）
 const SHARED_KEYS = [
@@ -22,7 +38,8 @@ const SHARED_KEYS = [
   "userAgent",
 ];
 
-export function resolveTarget(name) {
+export async function resolveTarget(name) {
+  const config = await loadConfig();
   const targets = config.targets ?? [];
 
   if (targets.length === 0) {

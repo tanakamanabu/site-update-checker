@@ -13,7 +13,7 @@ import { PNG } from "pngjs";
 import pixelmatch from "pixelmatch";
 import { resolveTarget } from "./target.js";
 
-const config = resolveTarget(process.argv[2]);
+const config = await resolveTarget(process.argv[2]);
 
 const beforeDir = path.join(config.reportDir, "before", "screenshots");
 const afterDir = path.join(config.reportDir, "after", "screenshots");

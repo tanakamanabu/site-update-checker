@@ -19,7 +19,7 @@ if (!["before", "after"].includes(phase)) {
   process.exit(1);
 }
 
-const config = resolveTarget(process.argv[3]);
+const config = await resolveTarget(process.argv[3]);
 
 const ssDir = path.join(config.reportDir, phase, "screenshots");
 const dataFile = path.join(config.reportDir, phase, "results.json");
