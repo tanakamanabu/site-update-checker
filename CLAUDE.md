@@ -63,21 +63,15 @@ npm run check  -- <name>   # after + diff を連続実行
 - Basic 認証付きステージング環境にも対応（`config.basicAuth`）。
 - CI・自動テストは未着手。
 
-### エラーハンドリング強化 TODO（feature/error-handling で対応中）
+### エラーハンドリング強化（feature/error-handling で対応済み）
 
-優先度高（検出すべき異常の見逃し・成果消失を防ぐ）:
+1. **スクショ欠損が diff で素通りしない**: 両フェーズにページが存在するのに片方（または両方）のスクショが無い／PNG が壊れて比較できないケースを `diff.js` が「撮影失敗・比較不能」として分類し、サマリーカード・専用セクションに表示する。差分0で素通りしなくなった。
+2. **`results.json` 破損で即死しない**: `diff.js` の読み込みを `loadResults()` に集約。ファイル・フェーズ・パースエラーを明示し、crawl の再実行を促す。`pages[]` の存在も検証。
+3. **クロール途中クラッシュで成果が残る**: `crawl.js` は `writeResults()` をバッチごと＋`finally` で呼び、途中で落ちても部分結果の `results.json` が残る。書き込みエラーは警告のみで続行。
+4. **HEAD fetch の誤検出を抑制**: リンク切れ判定で HEAD が 405/501 のとき GET でフォールバックしてから判定。
+5. **スクショ書き込み失敗を局所化**: `page.screenshot()` を専用 try/catch で囲み、撮影失敗を「読み込みエラー」と混同しない（screenshot は null のまま → diff 側が「撮影失敗」で拾う）。`page.close()` も保護。
+6. **壊れた PNG で比較ループが止まらない**: `compareScreenshots()` を try/catch 化（`loadPNG` は同期関数に戻した）。壊れた画像は `{ error }` を返し「比較不能」として記録。
+- **config.js 不在時の案内**: `target.js` は config.js を動的 import し、不在なら `cp config.sample.js config.js` を案内。`resolveTarget` は async になり、呼び出し側はトップレベル await（ESM）。
+- **ネットワーク到達不可の区別**: DNS 失敗・接続拒否（`ERR_NAME_NOT_RESOLVED`/`ECONNREFUSED` 等）を検出。起点 URL が到達不可なら冒頭で目立つ警告を出し、サマリーに到達不可件数を計上。
 
-1. **スクショ欠損が diff で素通りする問題**: `crawl.js` で `page.goto` 失敗時は `screenshot: null` になるが、`diff.js` は before/after 両方に screenshot がある時しか比較せず、片方だけ撮影失敗だと差分0扱いで素通りする。片側だけ撮れたケースを「撮影失敗」として分類・表示する。
-2. **`results.json` 破損で diff が即死**: `diff.js` の `JSON.parse` が裸。不完全な JSON で例外。try/catch して原因の分かるメッセージを出す。
-3. **クロール途中クラッシュで成果全消失**: `results.json` の書き出しが全巡回後の1回だけ。途中で落ちると部分結果が残らない。途中保存 or `try/finally` で部分結果を書き出す。
-
-優先度中（精度・堅牢性）:
-
-4. **HEAD fetch のリンク切れ誤検出**: `HEAD` 固定で 405/501 を返すサーバーを誤爆。HEAD が 405/501 のとき GET でフォールバック。
-5. **ディスク書き込みエラーが無防備**: スクショ保存・`writeFileSync` が容量/権限エラーで全体停止。個別 try/catch でそのページだけ失敗に留める。
-6. **`loadPNG` の名ばかり Promise**: `PNG.sync.read` の同期例外が reject されず比較ループ全体が落ちる。`compareScreenshots` を try/catch で囲み、壊れた画像は「比較不能」として記録。
-
-優先度低:
-
-- `config.js` 不在時に「`cp config.sample.js config.js` してね」と案内する。
-- ネットワーク不通・DNS 失敗を個別ページエラーと区別して冒頭で気づけるようにする。
+残タスク: CI・自動テストは未着手。
