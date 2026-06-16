@@ -40,6 +40,15 @@ function isExcluded(url) {
   return config.excludePatterns.some((p) => p.test(url));
 }
 
+// DNS 解決失敗・接続拒否などの「ネットワーク到達不可」エラーか判定。
+// これらは個別ページの問題ではなく、URL ミスや対象サーバー停止が原因で、
+// 全ページ失敗が確定する。個別ページエラーと区別して早めに気づけるようにする。
+function isNetworkUnreachable(message) {
+  return /ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_REFUSED|ERR_INTERNET_DISCONNECTED|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_TIMED_OUT|ENOTFOUND|ECONNREFUSED|EAI_AGAIN/i.test(
+    message ?? ""
+  );
+}
+
 // 同一ドメインかどうか判定
 function isSameDomain(url) {
   try {
@@ -179,6 +188,18 @@ async function crawl() {
           result.error = err.message;
           result.status = 0;
           console.log(`💥 [${processed}] エラー: ${url} - ${err.message}`);
+          // 起点 URL がネットワーク到達不可なら、以降も全滅が確定。冒頭で警告。
+          if (url === config.baseUrl && isNetworkUnreachable(err.message)) {
+            console.error(
+              `\n⚠️  起点 URL に到達できません（ネットワーク到達不可）: ${config.baseUrl}`
+            );
+            console.error(
+              "   baseUrl の綴り・スキーム（http/https）・対象サーバーの稼働を確認してください。"
+            );
+            console.error(
+              "   Basic 認証付きステージングなら config.basicAuth の設定も確認してください。\n"
+            );
+          }
         } finally {
           await page.close().catch(() => {});
         }
@@ -198,9 +219,13 @@ async function crawl() {
 
   // サマリー表示
   const errors = results.filter((r) => r.status === 0 || r.status >= 400);
+  const unreachable = results.filter((r) => isNetworkUnreachable(r.error));
   console.log(`\n📊 クロール完了 [${phase}]`);
   console.log(`   総ページ数    : ${results.length}`);
   console.log(`   エラーページ  : ${errors.length}`);
+  if (unreachable.length > 0) {
+    console.log(`     うち到達不可: ${unreachable.length}（ネットワーク/DNS）`);
+  }
   console.log(`   リンク切れ    : ${brokenLinks.length}`);
   console.log(`   結果保存先    : ${dataFile}\n`);
 }
