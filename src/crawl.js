@@ -114,11 +114,18 @@ async function crawl() {
 
           result.status = response?.status() ?? 0;
 
-          // スクリーンショット保存
+          // スクリーンショット保存。撮影・書き込み失敗（容量不足・権限など）で
+          // ページ全体を読み込みエラー扱いにせず、撮影失敗だけを記録する。
+          // screenshot が null のままなら diff 側が「撮影失敗」として拾う。
           const filename = urlToFilename(url) + ".png";
           const ssPath = path.join(ssDir, filename);
-          await page.screenshot({ path: ssPath, fullPage: true });
-          result.screenshot = filename;
+          try {
+            await page.screenshot({ path: ssPath, fullPage: true });
+            result.screenshot = filename;
+          } catch (ssErr) {
+            result.error = `スクショ失敗: ${ssErr.message}`;
+            console.log(`📷 [${processed}] スクショ失敗: ${url} - ${ssErr.message}`);
+          }
 
           // ページ内のリンクを収集
           const links = await page.evaluate(() => {
@@ -168,7 +175,7 @@ async function crawl() {
           result.status = 0;
           console.log(`💥 [${processed}] エラー: ${url} - ${err.message}`);
         } finally {
-          await page.close();
+          await page.close().catch(() => {});
         }
 
         results.push(result);
