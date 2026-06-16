@@ -200,7 +200,7 @@ async function generateReport() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WP Update Checker Report</title>
+<title>Site Update Checker Report</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1117; color: #e2e8f0; line-height: 1.6; }
@@ -245,7 +245,7 @@ async function generateReport() {
 </head>
 <body>
 <header>
-  <h1>🔍 WP Update Checker</h1>
+  <h1>🔍 Site Update Checker</h1>
   <div class="meta">
     対象: ${escapeHtml(config.baseUrl)} &nbsp;|&nbsp;
     Before: ${escapeHtml(before.crawledAt)} &nbsp;|&nbsp;

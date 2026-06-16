@@ -1,5 +1,5 @@
 // =============================================
-//  wp-checker 設定ファイル（テンプレート）
+//  site-update-checker 設定ファイル（テンプレート）
 //  このファイルを config.js にコピーして編集してください:
 //    cp config.sample.js config.js
 //  config.js は .gitignore 済みなので URL 等が GitHub に上がりません。
@@ -34,7 +34,7 @@ export const config = {
   stayOnDomain: true,
 
   // クローラーのUser-Agent
-  userAgent: "wp-checker-bot/1.0 (regression testing)",
+  userAgent: "site-update-checker-bot/1.0 (regression testing)",
 
   // レポートの出力先（この下に対象名ごとのサブフォルダが作られる）
   reportDir: "./reports",

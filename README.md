@@ -1,7 +1,7 @@
-# wp-checker
+# site-update-checker
 
-WordPressアップデートの前後でサイト全体をチェックするツールです。  
-外部から実行する方式なのでWPサーバーへの追加インストール不要。
+サイトの更新（リニューアル・デプロイ・WordPress等のアップデート）の前後で、サイト全体を外部からチェックするツールです。  
+外部から実行する方式なので対象サーバーへの追加インストール不要。
 
 ## できること
 
@@ -65,9 +65,9 @@ npm run before -- siteA
 
 → `reports/siteA/before/` にスクリーンショット＋結果JSONが保存される
 
-### 3. WordPressをアップデート
+### 3. サイトを更新
 
-ステージング環境でWP本体・プラグインをアップデート
+ステージング環境でサイトを更新（リニューアル反映・デプロイ・WordPress等のアップデートなど）
 
 ### 4. アップデート後にクロール＋レポート生成
 
@@ -97,7 +97,7 @@ reports/siteA/report.html
 ## ディレクトリ構成
 
 ```
-wp-checker/
+site-update-checker/
 ├── config.sample.js   # 設定テンプレート（これをコピーして config.js を作る）
 ├── config.js          # ← 実際の設定（.gitignore 済み・ここだけ編集すればOK）
 ├── package.json

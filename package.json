@@ -1,7 +1,7 @@
 {
-  "name": "wp-checker",
+  "name": "site-update-checker",
   "version": "1.0.0",
-  "description": "WordPress update regression checker - visual diff + broken link detection",
+  "description": "Website update regression checker - visual diff + broken link detection",
   "type": "module",
   "scripts": {
     "before": "node src/crawl.js before",
