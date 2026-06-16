@@ -51,6 +51,24 @@ function isSameDomain(url) {
   }
 }
 
+// 現在までの結果を results.json に書き出す。バッチごとと、最後（finally）に
+// 呼ぶことで、クロールが途中でクラッシュしても部分結果が残るようにする。
+function writeResults(results, brokenLinks) {
+  const output = {
+    phase,
+    baseUrl: config.baseUrl,
+    crawledAt: new Date().toISOString(),
+    totalPages: results.length,
+    brokenLinks,
+    pages: results,
+  };
+  try {
+    fs.writeFileSync(dataFile, JSON.stringify(output, null, 2));
+  } catch (err) {
+    console.error(`⚠️  results.json の書き込みに失敗: ${err.message}`);
+  }
+}
+
 async function crawl() {
   console.log(`\n🚀 クロール開始 [${config.name}/${phase}] - ${config.baseUrl}\n`);
 
@@ -69,7 +87,8 @@ async function crawl() {
 
   let processed = 0;
 
-  while (queue.length > 0) {
+  try {
+    while (queue.length > 0) {
     // concurrency 分だけ並列処理
     const batch = queue.splice(0, config.concurrency);
     await Promise.all(
@@ -155,21 +174,15 @@ async function crawl() {
         results.push(result);
       })
     );
+
+      // バッチ完了ごとに逐次保存（途中クラッシュでも部分結果を残す）
+      writeResults(results, brokenLinks);
+    }
+  } finally {
+    await browser.close().catch(() => {});
+    // 正常終了でもクラッシュ時でも、最終結果を確実に書き出す
+    writeResults(results, brokenLinks);
   }
-
-  await browser.close();
-
-  // 結果を保存
-  const output = {
-    phase,
-    baseUrl: config.baseUrl,
-    crawledAt: new Date().toISOString(),
-    totalPages: results.length,
-    brokenLinks,
-    pages: results,
-  };
-
-  fs.writeFileSync(dataFile, JSON.stringify(output, null, 2));
 
   // サマリー表示
   const errors = results.filter((r) => r.status === 0 || r.status >= 400);
