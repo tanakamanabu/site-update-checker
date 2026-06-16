@@ -61,4 +61,23 @@ npm run check  -- <name>   # after + diff を連続実行
 - 初回は `cp config.sample.js config.js` してから `baseUrl` を対象サイトへ書き換える。`config.js` は `.gitignore` 済みなので URL・認証情報は上がらない。設定項目を増やすときは `config.sample.js` も更新すること。
 - `reports/` は大量のスクリーンショットが入るため `.gitignore` 済み。
 - Basic 認証付きステージング環境にも対応（`config.basicAuth`）。
-- CI・自動テスト・エラーハンドリングの強化は未着手。
+- CI・自動テストは未着手。
+
+### エラーハンドリング強化 TODO（feature/error-handling で対応中）
+
+優先度高（検出すべき異常の見逃し・成果消失を防ぐ）:
+
+1. **スクショ欠損が diff で素通りする問題**: `crawl.js` で `page.goto` 失敗時は `screenshot: null` になるが、`diff.js` は before/after 両方に screenshot がある時しか比較せず、片方だけ撮影失敗だと差分0扱いで素通りする。片側だけ撮れたケースを「撮影失敗」として分類・表示する。
+2. **`results.json` 破損で diff が即死**: `diff.js` の `JSON.parse` が裸。不完全な JSON で例外。try/catch して原因の分かるメッセージを出す。
+3. **クロール途中クラッシュで成果全消失**: `results.json` の書き出しが全巡回後の1回だけ。途中で落ちると部分結果が残らない。途中保存 or `try/finally` で部分結果を書き出す。
+
+優先度中（精度・堅牢性）:
+
+4. **HEAD fetch のリンク切れ誤検出**: `HEAD` 固定で 405/501 を返すサーバーを誤爆。HEAD が 405/501 のとき GET でフォールバック。
+5. **ディスク書き込みエラーが無防備**: スクショ保存・`writeFileSync` が容量/権限エラーで全体停止。個別 try/catch でそのページだけ失敗に留める。
+6. **`loadPNG` の名ばかり Promise**: `PNG.sync.read` の同期例外が reject されず比較ループ全体が落ちる。`compareScreenshots` を try/catch で囲み、壊れた画像は「比較不能」として記録。
+
+優先度低:
+
+- `config.js` 不在時に「`cp config.sample.js config.js` してね」と案内する。
+- ネットワーク不通・DNS 失敗を個別ページエラーと区別して冒頭で気づけるようにする。
