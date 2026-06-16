@@ -12,6 +12,7 @@ import path from "path";
 import { PNG } from "pngjs";
 import pixelmatch from "pixelmatch";
 import { resolveTarget } from "./target.js";
+import { escapeHtml, toPercent, detectMissingScreenshot } from "./util.js";
 
 const config = await resolveTarget(process.argv[2]);
 
@@ -132,18 +133,6 @@ function loadResults(filepath, phase) {
   return data;
 }
 
-function toPercent(ratio) {
-  return (ratio * 100).toFixed(2) + "%";
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 async function generateReport() {
   console.log("\n🔍 差分レポート生成中...\n");
 
@@ -197,17 +186,13 @@ async function generateReport() {
         entry.diffRatio = result.diffRatio;
         entry.diffFilename = result.diffFilename;
       }
-    } else if (!entry.isNew && !entry.isRemoved) {
+    } else {
       // 両フェーズにページはあるのに片方（または両方）のスクショが無い＝撮影失敗。
       // ここを見逃すと「壊れてスクショが撮れなくなったページ」が差分0で素通りする。
-      const missing = [];
-      if (!beforePage?.screenshot) missing.push("before");
-      if (!afterPage?.screenshot) missing.push("after");
-      if (missing.length > 0) {
-        entry.captureFailed = true;
-        const errNote = afterPage?.error || beforePage?.error;
-        entry.captureNote =
-          `${missing.join(" / ")} のスクショ無し` + (errNote ? `（${errNote}）` : "");
+      const missing = detectMissingScreenshot(beforePage, afterPage);
+      if (missing) {
+        entry.captureFailed = missing.captureFailed;
+        entry.captureNote = missing.captureNote;
       }
     }
 

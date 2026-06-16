@@ -12,6 +12,12 @@ import { chromium } from "playwright";
 import fs from "fs";
 import path from "path";
 import { resolveTarget } from "./target.js";
+import {
+  urlToFilename,
+  isNetworkUnreachable,
+  isSameDomain,
+  isExcluded,
+} from "./util.js";
 
 const phase = process.argv[2];
 if (!["before", "after"].includes(phase)) {
@@ -25,40 +31,6 @@ const ssDir = path.join(config.reportDir, phase, "screenshots");
 const dataFile = path.join(config.reportDir, phase, "results.json");
 
 fs.mkdirSync(ssDir, { recursive: true });
-
-// URL を安全なファイル名に変換
-function urlToFilename(url) {
-  return url
-    .replace(/^https?:\/\//, "")
-    .replace(/[^a-zA-Z0-9_\-]/g, "_")
-    .replace(/_+/g, "_")
-    .substring(0, 200);
-}
-
-// 除外URLかどうか判定
-function isExcluded(url) {
-  return config.excludePatterns.some((p) => p.test(url));
-}
-
-// DNS 解決失敗・接続拒否などの「ネットワーク到達不可」エラーか判定。
-// これらは個別ページの問題ではなく、URL ミスや対象サーバー停止が原因で、
-// 全ページ失敗が確定する。個別ページエラーと区別して早めに気づけるようにする。
-function isNetworkUnreachable(message) {
-  return /ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_REFUSED|ERR_INTERNET_DISCONNECTED|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_TIMED_OUT|ENOTFOUND|ECONNREFUSED|EAI_AGAIN/i.test(
-    message ?? ""
-  );
-}
-
-// 同一ドメインかどうか判定
-function isSameDomain(url) {
-  try {
-    const base = new URL(config.baseUrl);
-    const target = new URL(url);
-    return target.hostname === base.hostname;
-  } catch {
-    return false;
-  }
-}
 
 // 現在までの結果を results.json に書き出す。バッチごとと、最後（finally）に
 // 呼ぶことで、クロールが途中でクラッシュしても部分結果が残るようにする。
@@ -146,10 +118,10 @@ async function crawl() {
           // リンク切れチェック（ページ内リンクをfetchで確認）
           const uniqueLinks = [...new Set(links)];
           for (const link of uniqueLinks) {
-            if (isExcluded(link)) continue;
+            if (isExcluded(link, config.excludePatterns)) continue;
 
             // 同一ドメインのリンクはキューに追加
-            if (config.stayOnDomain && isSameDomain(link) && !visited.has(link)) {
+            if (config.stayOnDomain && isSameDomain(link, config.baseUrl) && !visited.has(link)) {
               const normalized = link.split("#")[0].split("?")[0];
               if (!visited.has(normalized) && !queue.includes(normalized)) {
                 queue.push(normalized);
