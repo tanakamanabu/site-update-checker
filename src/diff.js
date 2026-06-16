@@ -12,8 +12,9 @@ import path from "path";
 import { PNG } from "pngjs";
 import pixelmatch from "pixelmatch";
 import { resolveTarget } from "./target.js";
+import { escapeHtml, toPercent, detectMissingScreenshot } from "./util.js";
 
-const config = resolveTarget(process.argv[2]);
+const config = await resolveTarget(process.argv[2]);
 
 const beforeDir = path.join(config.reportDir, "before", "screenshots");
 const afterDir = path.join(config.reportDir, "after", "screenshots");
@@ -24,11 +25,9 @@ const afterData = path.join(config.reportDir, "after", "results.json");
 fs.mkdirSync(diffDir, { recursive: true });
 
 function loadPNG(filepath) {
-  return new Promise((resolve, reject) => {
-    const data = fs.readFileSync(filepath);
-    const png = PNG.sync.read(data);
-    resolve(png);
-  });
+  // readFileSync / PNG.sync.read は同期。破損 PNG はここで throw する。
+  const data = fs.readFileSync(filepath);
+  return PNG.sync.read(data);
 }
 
 function resizePNG(png, width, height) {
@@ -52,7 +51,7 @@ function resizePNG(png, width, height) {
   return out;
 }
 
-async function compareScreenshots(filename) {
+function compareScreenshots(filename) {
   const beforePath = path.join(beforeDir, filename);
   const afterPath = path.join(afterDir, filename);
 
@@ -60,55 +59,78 @@ async function compareScreenshots(filename) {
     return null;
   }
 
-  let imgBefore = await loadPNG(beforePath);
-  let imgAfter = await loadPNG(afterPath);
+  // PNG 読み込み・比較・diff 書き出しのいずれかが失敗しても、
+  // 比較ループ全体を巻き込まず「比較不能」として返す。
+  try {
+    let imgBefore = loadPNG(beforePath);
+    let imgAfter = loadPNG(afterPath);
 
-  // サイズが異なる場合は大きい方に合わせる
-  const width = Math.max(imgBefore.width, imgAfter.width);
-  const height = Math.max(imgBefore.height, imgAfter.height);
+    // サイズが異なる場合は大きい方に合わせる
+    const width = Math.max(imgBefore.width, imgAfter.width);
+    const height = Math.max(imgBefore.height, imgAfter.height);
 
-  if (imgBefore.width !== width || imgBefore.height !== height) {
-    imgBefore = resizePNG(imgBefore, width, height);
-  }
-  if (imgAfter.width !== width || imgAfter.height !== height) {
-    imgAfter = resizePNG(imgAfter, width, height);
-  }
+    if (imgBefore.width !== width || imgBefore.height !== height) {
+      imgBefore = resizePNG(imgBefore, width, height);
+    }
+    if (imgAfter.width !== width || imgAfter.height !== height) {
+      imgAfter = resizePNG(imgAfter, width, height);
+    }
 
-  const diffImg = new PNG({ width, height });
-  const numDiff = pixelmatch(
-    imgBefore.data,
-    imgAfter.data,
-    diffImg.data,
-    width,
-    height,
-    { threshold: 0.1, includeAA: false }
-  );
-
-  const totalPixels = width * height;
-  const diffRatio = numDiff / totalPixels;
-
-  if (diffRatio > config.diffThreshold) {
-    const diffFilename = "diff_" + filename;
-    fs.writeFileSync(
-      path.join(diffDir, diffFilename),
-      PNG.sync.write(diffImg)
+    const diffImg = new PNG({ width, height });
+    const numDiff = pixelmatch(
+      imgBefore.data,
+      imgAfter.data,
+      diffImg.data,
+      width,
+      height,
+      { threshold: 0.1, includeAA: false }
     );
-    return { diffRatio, diffFilename, numDiff, totalPixels };
+
+    const totalPixels = width * height;
+    const diffRatio = numDiff / totalPixels;
+
+    if (diffRatio > config.diffThreshold) {
+      const diffFilename = "diff_" + filename;
+      fs.writeFileSync(
+        path.join(diffDir, diffFilename),
+        PNG.sync.write(diffImg)
+      );
+      return { diffRatio, diffFilename, numDiff, totalPixels };
+    }
+
+    return { diffRatio, diffFilename: null, numDiff, totalPixels };
+  } catch (err) {
+    return { error: `画像比較失敗: ${err.message}` };
+  }
+}
+
+// results.json を読み込む。クロールが途中で落ちると JSON が壊れている
+// ことがあるので、原因の分かるメッセージを出して終了する。
+function loadResults(filepath, phase) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filepath, "utf8");
+  } catch (err) {
+    console.error(`❌ ${phase} の results.json を読み込めません: ${err.message}`);
+    process.exit(1);
   }
 
-  return { diffRatio, diffFilename: null, numDiff, totalPixels };
-}
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    console.error(`❌ ${phase} の results.json が壊れています（${filepath}）: ${err.message}`);
+    console.error("   クロールが途中で失敗した可能性があります。crawl を再実行してください。");
+    process.exit(1);
+  }
 
-function toPercent(ratio) {
-  return (ratio * 100).toFixed(2) + "%";
-}
+  if (!data || !Array.isArray(data.pages)) {
+    console.error(`❌ ${phase} の results.json に pages 配列がありません（${filepath}）。`);
+    console.error("   crawl を再実行してください。");
+    process.exit(1);
+  }
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return data;
 }
 
 async function generateReport() {
@@ -119,8 +141,8 @@ async function generateReport() {
     process.exit(1);
   }
 
-  const before = JSON.parse(fs.readFileSync(beforeData));
-  const after = JSON.parse(fs.readFileSync(afterData));
+  const before = loadResults(beforeData, "before");
+  const after = loadResults(afterData, "after");
 
   // ページをURLでマップ化
   const beforeMap = Object.fromEntries(before.pages.map((p) => [p.url, p]));
@@ -148,14 +170,29 @@ async function generateReport() {
       diffFilename: null,
       hasBrokenLinks: (afterPage?.outboundBroken ?? []).length > 0,
       brokenLinks: afterPage?.outboundBroken ?? [],
+      // 両フェーズにページは存在するのにスクショが欠落・比較不能なケース
+      captureFailed: false,
+      captureNote: null,
     };
 
     // スクリーンショット比較
     if (beforePage?.screenshot && afterPage?.screenshot && beforePage.screenshot === afterPage.screenshot) {
       const result = await compareScreenshots(beforePage.screenshot);
-      if (result) {
+      if (result && result.error) {
+        // PNG 破損などで比較できなかった
+        entry.captureFailed = true;
+        entry.captureNote = result.error;
+      } else if (result) {
         entry.diffRatio = result.diffRatio;
         entry.diffFilename = result.diffFilename;
+      }
+    } else {
+      // 両フェーズにページはあるのに片方（または両方）のスクショが無い＝撮影失敗。
+      // ここを見逃すと「壊れてスクショが撮れなくなったページ」が差分0で素通りする。
+      const missing = detectMissingScreenshot(beforePage, afterPage);
+      if (missing) {
+        entry.captureFailed = missing.captureFailed;
+        entry.captureNote = missing.captureNote;
       }
     }
 
@@ -171,6 +208,7 @@ async function generateReport() {
 
   const newPages = diffResults.filter((r) => r.isNew);
   const removedPages = diffResults.filter((r) => r.isRemoved);
+  const captureFailures = diffResults.filter((r) => r.captureFailed);
   const statusChanged = diffResults.filter(
     (r) => r.beforeStatus !== null && r.afterStatus !== null && r.beforeStatus !== r.afterStatus
   );
@@ -266,6 +304,10 @@ async function generateReport() {
     <div class="num">${statusChanged.length}</div>
     <div class="label">ステータス変化</div>
   </div>
+  <div class="stat ${captureFailures.length > 0 ? "danger" : "ok"}">
+    <div class="num">${captureFailures.length}</div>
+    <div class="label">撮影失敗・比較不能</div>
+  </div>
   <div class="stat info">
     <div class="num">${newPages.length}</div>
     <div class="label">新規ページ</div>
@@ -329,6 +371,25 @@ async function generateReport() {
     </tr>`).join("")}
     </tbody></table>`}
 
+  <!-- 撮影失敗・比較不能 -->
+  <h2>🚫 撮影失敗・比較不能 <span class="badge">${captureFailures.length}件</span></h2>
+  ${captureFailures.length === 0
+    ? `<div class="empty">なし ✅</div>`
+    : `<table>
+    <thead><tr><th>URL</th><th>Before</th><th>After</th><th>理由</th></tr></thead>
+    <tbody>
+    ${captureFailures.map((r) => {
+      const bCls = (r.beforeStatus ?? 0) < 400 ? "ok" : "err";
+      const aCls = (r.afterStatus ?? 0) < 400 ? "ok" : "err";
+      return `<tr>
+        <td class="url"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a></td>
+        <td><span class="status ${bCls}">${r.beforeStatus ?? "-"}</span></td>
+        <td><span class="status ${aCls}">${r.afterStatus ?? "-"}</span></td>
+        <td>${escapeHtml(r.captureNote ?? "")}</td>
+      </tr>`;
+    }).join("")}
+    </tbody></table>`}
+
   <!-- ステータス変化 -->
   <h2>⚡ HTTPステータス変化 <span class="badge">${statusChanged.length}件</span></h2>
   ${statusChanged.length === 0
@@ -377,6 +438,7 @@ async function generateReport() {
   console.log(`   ビジュアル差分  : ${visualDiffs.length}件`);
   console.log(`   リンク切れ      : ${uniqueBrokenLinks.length}件`);
   console.log(`   ステータス変化  : ${statusChanged.length}件`);
+  console.log(`   撮影失敗・比較不能: ${captureFailures.length}件`);
   console.log(`\n   レポート: ${reportPath}\n`);
 }
 

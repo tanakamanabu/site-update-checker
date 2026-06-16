@@ -12,6 +12,12 @@ import { chromium } from "playwright";
 import fs from "fs";
 import path from "path";
 import { resolveTarget } from "./target.js";
+import {
+  urlToFilename,
+  isNetworkUnreachable,
+  isSameDomain,
+  isExcluded,
+} from "./util.js";
 
 const phase = process.argv[2];
 if (!["before", "after"].includes(phase)) {
@@ -19,35 +25,28 @@ if (!["before", "after"].includes(phase)) {
   process.exit(1);
 }
 
-const config = resolveTarget(process.argv[3]);
+const config = await resolveTarget(process.argv[3]);
 
 const ssDir = path.join(config.reportDir, phase, "screenshots");
 const dataFile = path.join(config.reportDir, phase, "results.json");
 
 fs.mkdirSync(ssDir, { recursive: true });
 
-// URL を安全なファイル名に変換
-function urlToFilename(url) {
-  return url
-    .replace(/^https?:\/\//, "")
-    .replace(/[^a-zA-Z0-9_\-]/g, "_")
-    .replace(/_+/g, "_")
-    .substring(0, 200);
-}
-
-// 除外URLかどうか判定
-function isExcluded(url) {
-  return config.excludePatterns.some((p) => p.test(url));
-}
-
-// 同一ドメインかどうか判定
-function isSameDomain(url) {
+// 現在までの結果を results.json に書き出す。バッチごとと、最後（finally）に
+// 呼ぶことで、クロールが途中でクラッシュしても部分結果が残るようにする。
+function writeResults(results, brokenLinks) {
+  const output = {
+    phase,
+    baseUrl: config.baseUrl,
+    crawledAt: new Date().toISOString(),
+    totalPages: results.length,
+    brokenLinks,
+    pages: results,
+  };
   try {
-    const base = new URL(config.baseUrl);
-    const target = new URL(url);
-    return target.hostname === base.hostname;
-  } catch {
-    return false;
+    fs.writeFileSync(dataFile, JSON.stringify(output, null, 2));
+  } catch (err) {
+    console.error(`⚠️  results.json の書き込みに失敗: ${err.message}`);
   }
 }
 
@@ -69,7 +68,8 @@ async function crawl() {
 
   let processed = 0;
 
-  while (queue.length > 0) {
+  try {
+    while (queue.length > 0) {
     // concurrency 分だけ並列処理
     const batch = queue.splice(0, config.concurrency);
     await Promise.all(
@@ -95,11 +95,18 @@ async function crawl() {
 
           result.status = response?.status() ?? 0;
 
-          // スクリーンショット保存
+          // スクリーンショット保存。撮影・書き込み失敗（容量不足・権限など）で
+          // ページ全体を読み込みエラー扱いにせず、撮影失敗だけを記録する。
+          // screenshot が null のままなら diff 側が「撮影失敗」として拾う。
           const filename = urlToFilename(url) + ".png";
           const ssPath = path.join(ssDir, filename);
-          await page.screenshot({ path: ssPath, fullPage: true });
-          result.screenshot = filename;
+          try {
+            await page.screenshot({ path: ssPath, fullPage: true });
+            result.screenshot = filename;
+          } catch (ssErr) {
+            result.error = `スクショ失敗: ${ssErr.message}`;
+            console.log(`📷 [${processed}] スクショ失敗: ${url} - ${ssErr.message}`);
+          }
 
           // ページ内のリンクを収集
           const links = await page.evaluate(() => {
@@ -111,10 +118,10 @@ async function crawl() {
           // リンク切れチェック（ページ内リンクをfetchで確認）
           const uniqueLinks = [...new Set(links)];
           for (const link of uniqueLinks) {
-            if (isExcluded(link)) continue;
+            if (isExcluded(link, config.excludePatterns)) continue;
 
             // 同一ドメインのリンクはキューに追加
-            if (config.stayOnDomain && isSameDomain(link) && !visited.has(link)) {
+            if (config.stayOnDomain && isSameDomain(link, config.baseUrl) && !visited.has(link)) {
               const normalized = link.split("#")[0].split("?")[0];
               if (!visited.has(normalized) && !queue.includes(normalized)) {
                 queue.push(normalized);
@@ -125,7 +132,12 @@ async function crawl() {
             try {
               const res = await page.evaluate(async (href) => {
                 try {
-                  const r = await fetch(href, { method: "HEAD", redirect: "follow" });
+                  let r = await fetch(href, { method: "HEAD", redirect: "follow" });
+                  // HEAD を許可しないサーバー（405/501）は GET で確認し直す。
+                  // HEAD 固定だと生きてるリンクを誤って「リンク切れ」と判定する。
+                  if (r.status === 405 || r.status === 501) {
+                    r = await fetch(href, { method: "GET", redirect: "follow" });
+                  }
                   return r.status;
                 } catch {
                   return 0;
@@ -148,34 +160,44 @@ async function crawl() {
           result.error = err.message;
           result.status = 0;
           console.log(`💥 [${processed}] エラー: ${url} - ${err.message}`);
+          // 起点 URL がネットワーク到達不可なら、以降も全滅が確定。冒頭で警告。
+          if (url === config.baseUrl && isNetworkUnreachable(err.message)) {
+            console.error(
+              `\n⚠️  起点 URL に到達できません（ネットワーク到達不可）: ${config.baseUrl}`
+            );
+            console.error(
+              "   baseUrl の綴り・スキーム（http/https）・対象サーバーの稼働を確認してください。"
+            );
+            console.error(
+              "   Basic 認証付きステージングなら config.basicAuth の設定も確認してください。\n"
+            );
+          }
         } finally {
-          await page.close();
+          await page.close().catch(() => {});
         }
 
         results.push(result);
       })
     );
+
+      // バッチ完了ごとに逐次保存（途中クラッシュでも部分結果を残す）
+      writeResults(results, brokenLinks);
+    }
+  } finally {
+    await browser.close().catch(() => {});
+    // 正常終了でもクラッシュ時でも、最終結果を確実に書き出す
+    writeResults(results, brokenLinks);
   }
-
-  await browser.close();
-
-  // 結果を保存
-  const output = {
-    phase,
-    baseUrl: config.baseUrl,
-    crawledAt: new Date().toISOString(),
-    totalPages: results.length,
-    brokenLinks,
-    pages: results,
-  };
-
-  fs.writeFileSync(dataFile, JSON.stringify(output, null, 2));
 
   // サマリー表示
   const errors = results.filter((r) => r.status === 0 || r.status >= 400);
+  const unreachable = results.filter((r) => isNetworkUnreachable(r.error));
   console.log(`\n📊 クロール完了 [${phase}]`);
   console.log(`   総ページ数    : ${results.length}`);
   console.log(`   エラーページ  : ${errors.length}`);
+  if (unreachable.length > 0) {
+    console.log(`     うち到達不可: ${unreachable.length}（ネットワーク/DNS）`);
+  }
   console.log(`   リンク切れ    : ${brokenLinks.length}`);
   console.log(`   結果保存先    : ${dataFile}\n`);
 }

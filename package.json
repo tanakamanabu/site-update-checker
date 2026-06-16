@@ -7,7 +7,8 @@
     "before": "node src/crawl.js before",
     "after": "node src/crawl.js after",
     "diff": "node src/diff.js",
-    "check": "node src/check.js"
+    "check": "node src/check.js",
+    "test": "node --test"
   },
   "dependencies": {
     "playwright": "^1.44.0",
