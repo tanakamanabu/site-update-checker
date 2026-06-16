@@ -151,7 +151,12 @@ async function crawl() {
             try {
               const res = await page.evaluate(async (href) => {
                 try {
-                  const r = await fetch(href, { method: "HEAD", redirect: "follow" });
+                  let r = await fetch(href, { method: "HEAD", redirect: "follow" });
+                  // HEAD を許可しないサーバー（405/501）は GET で確認し直す。
+                  // HEAD 固定だと生きてるリンクを誤って「リンク切れ」と判定する。
+                  if (r.status === 405 || r.status === 501) {
+                    r = await fetch(href, { method: "GET", redirect: "follow" });
+                  }
                   return r.status;
                 } catch {
                   return 0;
