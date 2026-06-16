@@ -103,6 +103,35 @@ function compareScreenshots(filename) {
   }
 }
 
+// results.json を読み込む。クロールが途中で落ちると JSON が壊れている
+// ことがあるので、原因の分かるメッセージを出して終了する。
+function loadResults(filepath, phase) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filepath, "utf8");
+  } catch (err) {
+    console.error(`❌ ${phase} の results.json を読み込めません: ${err.message}`);
+    process.exit(1);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    console.error(`❌ ${phase} の results.json が壊れています（${filepath}）: ${err.message}`);
+    console.error("   クロールが途中で失敗した可能性があります。crawl を再実行してください。");
+    process.exit(1);
+  }
+
+  if (!data || !Array.isArray(data.pages)) {
+    console.error(`❌ ${phase} の results.json に pages 配列がありません（${filepath}）。`);
+    console.error("   crawl を再実行してください。");
+    process.exit(1);
+  }
+
+  return data;
+}
+
 function toPercent(ratio) {
   return (ratio * 100).toFixed(2) + "%";
 }
@@ -123,8 +152,8 @@ async function generateReport() {
     process.exit(1);
   }
 
-  const before = JSON.parse(fs.readFileSync(beforeData));
-  const after = JSON.parse(fs.readFileSync(afterData));
+  const before = loadResults(beforeData, "before");
+  const after = loadResults(afterData, "after");
 
   // ページをURLでマップ化
   const beforeMap = Object.fromEntries(before.pages.map((p) => [p.url, p]));
