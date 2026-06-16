@@ -86,4 +86,3 @@ npm test                   # ユニットテスト（node:test、ブラウザ不
 
 - `node:test` による純粋関数のユニットテストを `test/` に追加（`npm test`）。テスト容易化のため純粋ロジックを `util.js` / `target.js` の `resolveTargetConfig` に切り出した。
 - GitHub Actions で push(master) / 全 PR 時に Node 18/20/22 で `npm test` を実行。
-- 未着手: crawl/diff の I/O を伴う結合テスト（Playwright 実起動や一時ディレクトリでの diff 生成）はまだ。純粋関数より費用対効果が低いため後回し。
