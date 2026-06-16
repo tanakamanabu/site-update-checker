@@ -12,7 +12,7 @@ import path from "path";
 import { PNG } from "pngjs";
 import pixelmatch from "pixelmatch";
 import { resolveTarget } from "./target.js";
-import { escapeHtml, toPercent, detectMissingScreenshot } from "./util.js";
+import { escapeHtml, toPercent, detectMissingScreenshot, classifyVisualChange } from "./util.js";
 
 const config = await resolveTarget(process.argv[2]);
 
@@ -89,7 +89,9 @@ function compareScreenshots(filename) {
     const totalPixels = width * height;
     const diffRatio = numDiff / totalPixels;
 
-    if (diffRatio > config.diffThreshold) {
+    // 1px でも違えば diff 画像を残す（取りこぼし防止）。閾値はあくまで
+    // 「強調するか」の判定で、ここでは「変化があるか」だけを見る。
+    if (numDiff > 0) {
       const diffFilename = "diff_" + filename;
       fs.writeFileSync(
         path.join(diffDir, diffFilename),
@@ -167,6 +169,7 @@ async function generateReport() {
       isNew: !beforePage,
       isRemoved: !afterPage,
       diffRatio: 0,
+      numDiff: 0,
       diffFilename: null,
       hasBrokenLinks: (afterPage?.outboundBroken ?? []).length > 0,
       brokenLinks: afterPage?.outboundBroken ?? [],
@@ -184,6 +187,7 @@ async function generateReport() {
         entry.captureNote = result.error;
       } else if (result) {
         entry.diffRatio = result.diffRatio;
+        entry.numDiff = result.numDiff;
         entry.diffFilename = result.diffFilename;
       }
     } else {
@@ -201,10 +205,19 @@ async function generateReport() {
 
   console.log("\n");
 
-  // 変化ありのページを分類
+  // 変化ありのページを分類。
+  // 1px でも違えば一覧に出す（ヒットミス防止）。各ページの分類は
+  // classifyVisualChange が "significant"（閾値以上＝強調）/ "minor" を返す。
   const visualDiffs = diffResults
-    .filter((r) => r.diffRatio > config.diffThreshold)
+    .map((r) => ({
+      ...r,
+      changeLevel: classifyVisualChange(r, config.diffThreshold),
+    }))
+    .filter((r) => r.changeLevel !== "none")
     .sort((a, b) => b.diffRatio - a.diffRatio);
+
+  // 閾値以上の「要確認」件数（サマリーで強調するため）
+  const significantDiffs = visualDiffs.filter((r) => r.changeLevel === "significant");
 
   const newPages = diffResults.filter((r) => r.isNew);
   const removedPages = diffResults.filter((r) => r.isRemoved);
@@ -267,6 +280,10 @@ async function generateReport() {
   .diff-pct.high { color: #f87171; }
   .diff-pct.mid { color: #fbbf24; }
   .diff-pct.low { color: #34d399; }
+  .diff-px { font-size: 0.72rem; color: #64748b; }
+  tr.significant td { background: #2a1620; }
+  tr.significant:hover td { background: #341a28; }
+  .tag.review { background: #7f1d1d; color: #fecaca; font-weight: 700; }
   .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
   .status.ok { background: #14532d; color: #4ade80; }
   .status.err { background: #450a0a; color: #f87171; }
@@ -294,7 +311,11 @@ async function generateReport() {
 <div class="summary">
   <div class="stat ${visualDiffs.length > 0 ? "warn" : "ok"}">
     <div class="num">${visualDiffs.length}</div>
-    <div class="label">ビジュアル差分あり</div>
+    <div class="label">ビジュアル差分あり（1px〜）</div>
+  </div>
+  <div class="stat ${significantDiffs.length > 0 ? "danger" : "ok"}">
+    <div class="num">${significantDiffs.length}</div>
+    <div class="label">うち要確認（閾値以上）</div>
   </div>
   <div class="stat ${uniqueBrokenLinks.length > 0 ? "danger" : "ok"}">
     <div class="num">${uniqueBrokenLinks.length}</div>
@@ -337,11 +358,12 @@ async function generateReport() {
     ${visualDiffs.map((r) => {
       const pct = r.diffRatio * 100;
       const cls = pct > 20 ? "high" : pct > 5 ? "mid" : "low";
+      const isSignificant = r.changeLevel === "significant";
       const bPage = beforeMap[r.url];
       const aPage = afterMap[r.url];
-      return `<tr>
-        <td class="url"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a></td>
-        <td><span class="diff-pct ${cls}">${toPercent(r.diffRatio)}</span></td>
+      return `<tr class="${isSignificant ? "significant" : ""}">
+        <td class="url"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a>${isSignificant ? ` <span class="tag review">要確認</span>` : ""}</td>
+        <td><span class="diff-pct ${cls}">${toPercent(r.diffRatio)}</span> <span class="diff-px">${r.numDiff.toLocaleString()}px</span></td>
         <td>
           <div class="screenshots">
             ${bPage?.screenshot ? `<div><a href="${relBefore}${escapeHtml(bPage.screenshot)}" target="_blank"><img src="${relBefore}${escapeHtml(bPage.screenshot)}" loading="lazy"></a><div class="cap">Before</div></div>` : ""}
@@ -435,7 +457,7 @@ async function generateReport() {
   fs.writeFileSync(reportPath, html);
 
   console.log("📊 レポート生成完了！");
-  console.log(`   ビジュアル差分  : ${visualDiffs.length}件`);
+  console.log(`   ビジュアル差分  : ${visualDiffs.length}件（うち要確認 ${significantDiffs.length}件）`);
   console.log(`   リンク切れ      : ${uniqueBrokenLinks.length}件`);
   console.log(`   ステータス変化  : ${statusChanged.length}件`);
   console.log(`   撮影失敗・比較不能: ${captureFailures.length}件`);

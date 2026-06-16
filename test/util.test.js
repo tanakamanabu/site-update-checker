@@ -14,6 +14,7 @@ import {
   escapeHtml,
   toPercent,
   detectMissingScreenshot,
+  classifyVisualChange,
 } from "../src/util.js";
 
 test("urlToFilename: スキームを落とし安全な文字に変換する", () => {
@@ -116,4 +117,26 @@ test("detectMissingScreenshot: 両方そろっていれば null", () => {
 test("detectMissingScreenshot: new/removed（片側のみ存在）は対象外で null", () => {
   assert.equal(detectMissingScreenshot(null, { screenshot: "a.png" }), null);
   assert.equal(detectMissingScreenshot({ screenshot: "a.png" }, null), null);
+});
+
+test("classifyVisualChange: 差分0pxは none", () => {
+  assert.equal(classifyVisualChange({ numDiff: 0, diffRatio: 0 }, 0.01), "none");
+});
+
+test("classifyVisualChange: 1pxでも違えば最低 minor（取りこぼさない）", () => {
+  // 8px=ほぼ0%でも閾値未満なら minor として一覧に出す
+  assert.equal(classifyVisualChange({ numDiff: 8, diffRatio: 3.7e-6 }, 0.01), "minor");
+  assert.equal(classifyVisualChange({ numDiff: 1, diffRatio: 1e-7 }, 0.01), "minor");
+});
+
+test("classifyVisualChange: 閾値超なら significant（強調対象）", () => {
+  assert.equal(classifyVisualChange({ numDiff: 50000, diffRatio: 0.05 }, 0.01), "significant");
+});
+
+test("classifyVisualChange: 閾値ちょうどは significant ではない（超過のみ）", () => {
+  assert.equal(classifyVisualChange({ numDiff: 100, diffRatio: 0.01 }, 0.01), "minor");
+});
+
+test("classifyVisualChange: 引数欠落時は既定値で none", () => {
+  assert.equal(classifyVisualChange(), "none");
 });

@@ -53,6 +53,16 @@ export function toPercent(ratio) {
   return (ratio * 100).toFixed(2) + "%";
 }
 
+// スクショ比較結果を「変化なし / 軽微な変化 / 有意な変化」に分類する。
+// 本番チェックの自動化ではヒットミスを避けたいので、1px でも違えば
+// "minor" 以上（＝一覧に出す）とし、取りこぼしを構造的に無くす。
+// diffThreshold 以上なら "significant"（＝レポートで強調表示する）。
+// diffThreshold は「出す/出さない」ではなく「強調する/しない」の閾値。
+export function classifyVisualChange({ numDiff = 0, diffRatio = 0 } = {}, diffThreshold = 0) {
+  if (numDiff <= 0) return "none";
+  return diffRatio > diffThreshold ? "significant" : "minor";
+}
+
 // 両フェーズにページが存在するのに screenshot が欠落しているケースを検出する。
 // new/removed ページ（片方にしか存在しない）は対象外で null を返す。
 // 欠落があれば { captureFailed: true, captureNote } を返す。
