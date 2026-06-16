@@ -29,7 +29,15 @@ npx playwright install chromium
 
 ## 使い方
 
-### 1. config.js を編集
+### 1. config.js を用意して編集
+
+`config.sample.js` をコピーして `config.js` を作り、対象サイトに合わせて編集します。
+
+```bash
+cp config.sample.js config.js
+```
+
+> `config.js` は `.gitignore` 済みです。チェック対象の URL や Basic 認証情報はここに書くため、リポジトリには上がりません。設定項目を増やしたいときは `config.sample.js` 側を更新してコミットします。
 
 ```js
 export const config = {
@@ -79,7 +87,8 @@ reports/report.html
 
 ```
 wp-checker/
-├── config.js          # ← ここだけ編集すればOK
+├── config.sample.js   # 設定テンプレート（これをコピーして config.js を作る）
+├── config.js          # ← 実際の設定（.gitignore 済み・ここだけ編集すればOK）
 ├── package.json
 ├── src/
 │   ├── crawl.js       # クロール・SS撮影・リンクチェック

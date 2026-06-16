@@ -3,5 +3,5 @@ reports/
 *.log
 .DS_Store
 
-# accidental brace-expansion artifact
-{src,reports/
+# 実際の設定ファイル（URL等が入るため）。config.sample.js をコピーして作る
+config.js

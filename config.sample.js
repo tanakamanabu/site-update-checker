@@ -1,6 +1,8 @@
 // =============================================
-//  wp-checker 設定ファイル
-//  ここだけ編集すれば動きます
+//  wp-checker 設定ファイル（テンプレート）
+//  このファイルを config.js にコピーして編集してください:
+//    cp config.sample.js config.js
+//  config.js は .gitignore 済みなので URL 等が GitHub に上がりません。
 // =============================================
 
 export const config = {
