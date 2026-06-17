@@ -5,7 +5,7 @@
 
 ## できること
 
-- 🕷️ サイト全体を再帰的にクロール（数百ページ対応）
+- 🕷️ サイト全体を再帰的にクロール（数百〜千ページ規模で運用実績あり）
 - 📸 全ページのスクリーンショットを撮影・比較（ビジュアルリグレッション）
 - 🔗 リンク切れ検出（HTTPステータスで判定）
 - 📊 差分サムネイル付きのHTMLレポートを生成
@@ -99,10 +99,12 @@ npm run check -- siteA   # after + diff を連続実行
 ### 5. レポートを確認
 
 ```
-reports/siteA/report.html
+reports/siteA/report/report.html
 ```
 
 対象ごとに `reports/<name>/` 配下へ分かれて出力されます。ブラウザで開くと差分サムネイル付きの一覧が見られます。
+
+> レポートで使う画像は `report/assets/` に集約された **自己完結フォルダ**です。クライアントに渡すときは `reports/<name>/report/` フォルダごと渡せば、`before/` `after/` `diff/` の生スクリーンショット（作業用データ）を含めずに共有できます。
 
 ---
 
@@ -117,17 +119,21 @@ site-update-checker/
 │   ├── crawl.js       # クロール・SS撮影・リンクチェック
 │   ├── diff.js        # 差分比較・レポート生成
 │   ├── check.js       # after + diff を対象名を引き継いで連続実行
-│   └── target.js      # 実行時引数から対象を解決（共通設定とマージ）
+│   ├── target.js      # 実行時引数から対象を解決（共通設定とマージ）
+│   └── util.js        # 副作用のない純粋関数群（テスト対象）
+├── test/              # node:test によるユニットテスト
 └── reports/
-    └── <対象名>/           # 対象（target.name）ごとに分離
+    └── <対象名>/             # 対象（target.name）ごとに分離
         ├── before/
         │   ├── screenshots/   # アプデ前のSS
         │   └── results.json   # クロール結果
         ├── after/
         │   ├── screenshots/   # アプデ後のSS
         │   └── results.json
-        ├── diff/              # 差分ハイライト画像
-        └── report.html        # ← 最終レポート
+        ├── diff/              # 差分ハイライト画像（作業用）
+        └── report/            # ← 納品用の自己完結フォルダ（これごと渡せる）
+            ├── report.html    # 最終レポート
+            └── assets/        # レポートで使う画像だけを集約
 ```
 
 ---
