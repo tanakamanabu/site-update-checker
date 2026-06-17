@@ -5,13 +5,25 @@
  * （だからこそユニットテストできる）。
  */
 
-// URL を安全なファイル名に変換する。
+import crypto from "node:crypto";
+
+// URL を安全かつ衝突しないファイル名に変換する。
+// 可読部だけだと、(1) サニタイズ後に別 URL が同名化する、(2) 大文字小文字を
+// 区別しないファイルシステム（Windows / macOS 既定）で `/Foo` と `/foo` が
+// 衝突する、という取りこぼしが起きる（別ページのスクショに上書きされる）。
+// そこで可読部は小文字化して安定させ、元 URL 全体の短いハッシュを必ず付与して
+// 一意性を担保する。同一 URL なら常に同じ名前になるので before/after も一致する。
 export function urlToFilename(url) {
-  return String(url)
+  const s = String(url);
+  const hash = crypto.createHash("sha1").update(s).digest("hex").slice(0, 8);
+  const base = s
     .replace(/^https?:\/\//, "")
     .replace(/[^a-zA-Z0-9_\-]/g, "_")
     .replace(/_+/g, "_")
-    .substring(0, 200);
+    .toLowerCase()
+    .slice(0, 150)
+    .replace(/^_+|_+$/g, "");
+  return base ? `${base}_${hash}` : hash;
 }
 
 // DNS 解決失敗・接続拒否などの「ネットワーク到達不可」エラーか判定する。

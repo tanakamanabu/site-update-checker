@@ -17,21 +17,34 @@ import {
   classifyVisualChange,
 } from "../src/util.js";
 
-test("urlToFilename: スキームを落とし安全な文字に変換する", () => {
-  assert.equal(
-    urlToFilename("https://example.com/foo/bar?x=1#sec"),
-    "example_com_foo_bar_x_1_sec"
-  );
+test("urlToFilename: スキームを落とし安全な文字に変換し、末尾にハッシュを付ける", () => {
+  const name = urlToFilename("https://example.com/foo/bar?x=1#sec");
+  // 可読部は小文字化、末尾は 8 桁の16進ハッシュ
+  assert.match(name, /^example_com_foo_bar_x_1_sec_[0-9a-f]{8}$/);
 });
 
 test("urlToFilename: 連続する _ は1つにまとめ、ハイフンは保持する", () => {
-  assert.equal(urlToFilename("http://a.com//b__c"), "a_com_b_c");
-  assert.equal(urlToFilename("http://a.com/b-c"), "a_com_b-c");
+  assert.match(urlToFilename("http://a.com//b__c"), /^a_com_b_c_[0-9a-f]{8}$/);
+  assert.match(urlToFilename("http://a.com/b-c"), /^a_com_b-c_[0-9a-f]{8}$/);
 });
 
-test("urlToFilename: 200文字に切り詰める", () => {
+test("urlToFilename: 同一URLは常に同じ名前（before/after が一致する）", () => {
+  const u = "https://example.com/page";
+  assert.equal(urlToFilename(u), urlToFilename(u));
+});
+
+test("urlToFilename: 大小違いの別URLは別ファイルになる（衝突しない）", () => {
+  // 大文字小文字を区別しないFSでも上書きされないこと
+  assert.notEqual(urlToFilename("http://a.com/Foo"), urlToFilename("http://a.com/foo"));
+  // サニタイズ後に同名化しがちなケースも、ハッシュで分離される
+  assert.notEqual(urlToFilename("http://a.com/a?b"), urlToFilename("http://a.com/a/b"));
+});
+
+test("urlToFilename: 長いURLでも上限内に収める", () => {
   const long = "https://example.com/" + "a".repeat(500);
-  assert.equal(urlToFilename(long).length, 200);
+  // 可読部150 + "_" + ハッシュ8 = 最大159
+  assert.ok(urlToFilename(long).length <= 159);
+  assert.match(urlToFilename(long), /_[0-9a-f]{8}$/);
 });
 
 test("isNetworkUnreachable: DNS/接続系エラーを検出する", () => {
