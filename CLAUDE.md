@@ -35,8 +35,10 @@ site-update-checker/
     └── <対象名>/        # config.targets[].name ごとに分離
         ├── before/{screenshots/, results.json}
         ├── after/{screenshots/, results.json}
-        ├── diff/      # 差分ハイライト画像
-        └── report.html  # 最終レポート
+        ├── diff/      # 差分ハイライト画像（作業用）
+        └── report/    # ★納品用 self-contained フォルダ（これごとクライアントに渡せる）
+            ├── report.html  # 最終レポート
+            └── assets/      # レポートで使う画像だけを集約（before_/after_/diff_）
 ```
 
 ## 開発コマンド
@@ -61,7 +63,7 @@ npm test                   # ユニットテスト（node:test、ブラウザ不
 - `crawl.js`: 引数 `[before|after] [対象名]`。解決済み `baseUrl` を起点に BFS でクロール、`concurrency` 件ずつ並列。`excludePatterns`（正規表現）と `stayOnDomain` で対象を絞る。リンク切れはページ内で `fetch(HEAD)` を実行しステータス判定。結果は各フェーズの `results.json` に保存。
 - **スクショ安定化（`crawl.js` の `stabilizePage`）**: `goto` は `waitUntil:"networkidle"` だが、フェードイン演出は networkidle 後に再生されるため、そのまま撮ると before/after で別々の中間フレームを撮って誤検出になる。撮影直前に (1) CSS アニメーション/トランジションを `0s !important` で無効化して最終状態へ飛ばす、(2) ページ全体を段階スクロールして IntersectionObserver 系の遅延表示を発火させ先頭へ戻す、(3) `screenshotDelay`(ms) だけ待つ（JS/rAF 駆動のフェードイン対策）。`disableAnimations`（既定 true）/ `screenshotDelay`（既定 0）で制御。演出自体の変化を見たい対象だけ `disableAnimations:false`。
 - **リソースブロック（`crawl.js` の `blockResources`）**: 画像が多いサイトは networkidle 待ちがボトルネックで遅い。`blockResources`（Playwright の resourceType 配列、例 `["image"]` / `["media","font"]`）を指定するとそのリソースを `context.route` で abort して高速化する。**既定は `[]`（全部読み込む）**。ブロックした分はスクショに写らず差分検出もできなくなるトレードオフなので、画像差分が不要な対象だけ targets[] 側で指定する。変更したら撮り条件が変わるので before/after を両方撮り直すこと。
-- `diff.js`: 引数 `[対象名]`。before/after を URL でマッチング。SS はサイズが違う場合は大きい方に白埋めリサイズしてから pixelmatch で比較。**本番チェックの自動化向けにヒットミスを避ける方針**: 1px でも差分があれば一覧に出し（diff 画像も出力）、`diffThreshold`（比率）を超えたものだけ「要確認」として強調表示する（`util.js` の `classifyVisualChange` が `none/minor/significant` を判定）。差分率は 0.00% に丸まる微小変更でも分かるよう実 px 数も併記。`diffThreshold` は「出す/出さない」ではなく「強調する/しない」の閾値。`report.html` は `reportDir` 直下に置き、SS への相対パスは `./before|after|diff/`（report.html と同階層）。ビジュアル差分 / リンク切れ / ステータス変化 / 新規・削除ページを分類して単一 HTML に出力。
+- `diff.js`: 引数 `[対象名]`。before/after を URL でマッチング。SS はサイズが違う場合は大きい方に白埋めリサイズしてから pixelmatch で比較。**本番チェックの自動化向けにヒットミスを避ける方針**: 1px でも差分があれば一覧に出し（diff 画像も出力）、`diffThreshold`（比率）を超えたものだけ「要確認」として強調表示する（`util.js` の `classifyVisualChange` が `none/minor/significant` を判定）。差分率は 0.00% に丸まる微小変更でも分かるよう実 px 数も併記。`diffThreshold` は「出す/出さない」ではなく「強調する/しない」の閾値。**納品用に self-contained 化**: `report.html` は `reportDir/report/` に出力し、レポートで実際に使う画像だけを `report/assets/` に集約コピーする（before/after は同名衝突を避け `before_`/`after_` を前置、diff は `diff_` のまま）。相対パスは `./assets/...`。`report/` フォルダごと渡せば before/after/diff の作業データ（全ページの生スクショ）を含めず分離できる。`assets/` は毎回作り直す。ビジュアル差分 / リンク切れ / ステータス変化 / 新規・削除ページを分類して単一 HTML に出力。
 - `check.js`: `spawnSync` で after → diff を順に呼び、対象名引数をそのまま引き継ぐ（npm の `--` 経由だと両方に引数が渡らない問題を回避するため）。
 - `util.js`: I/O・`process.exit`・グローバル設定参照を持たない純粋関数だけを置く（`urlToFilename` / `isNetworkUnreachable` / `isSameDomain` / `isExcluded` / `escapeHtml` / `toPercent` / `detectMissingScreenshot` / `classifyVisualChange`）。crawl.js / diff.js は import 時にトップレベル await で処理を開始するためそのままではテストできないので、テストしたいロジックはここへ切り出す方針。
 - `target.js`: 純粋関数 `resolveTargetConfig(config, name)`（エラーは throw）と、config.js を動的 import して失敗時に案内＋exit する CLI ラッパー `resolveTarget(name)` に分離。前者は config.js 不要でテストできる。

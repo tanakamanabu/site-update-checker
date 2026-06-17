@@ -22,7 +22,32 @@ const diffDir = path.join(config.reportDir, "diff");
 const beforeData = path.join(config.reportDir, "before", "results.json");
 const afterData = path.join(config.reportDir, "after", "results.json");
 
+// クライアント納品用の自己完結フォルダ。report.html と、レポートで実際に
+// 使う画像だけを assets/ に集約する。これごと渡せば before/after/diff の
+// 作業データ（全ページの生スクショ）を含めずに分離できる。
+const reportOutDir = path.join(config.reportDir, "report");
+const assetsDir = path.join(reportOutDir, "assets");
+
 fs.mkdirSync(diffDir, { recursive: true });
+
+// レポートで参照する画像を assets/ にコピーして相対パスを返す。
+// before/after は同名なので prefix で衝突回避（diff は既に diff_ 前置済み）。
+// 同一ファイルの二重コピーは copiedAssets で抑止する。
+const copiedAssets = new Set();
+function copyAsset(srcDir, filename, prefix = "") {
+  if (!filename) return null;
+  const dest = prefix + filename;
+  const rel = "./assets/" + dest;
+  if (copiedAssets.has(dest)) return rel;
+  try {
+    fs.copyFileSync(path.join(srcDir, filename), path.join(assetsDir, dest));
+    copiedAssets.add(dest);
+    return rel;
+  } catch (err) {
+    console.error(`⚠️  画像コピー失敗: ${filename} - ${err.message}`);
+    return null;
+  }
+}
 
 function loadPNG(filepath) {
   // readFileSync / PNG.sync.read は同期。破損 PNG はここで throw する。
@@ -219,6 +244,16 @@ async function generateReport() {
   // 閾値以上の「要確認」件数（サマリーで強調するため）
   const significantDiffs = visualDiffs.filter((r) => r.changeLevel === "significant");
 
+  // 納品用 assets/ を作り直し（古い画像を残さない）、レポートで使う
+  // before/after/diff 画像だけをコピーして相対パスを各エントリに付与する。
+  fs.rmSync(assetsDir, { recursive: true, force: true });
+  fs.mkdirSync(assetsDir, { recursive: true });
+  for (const r of visualDiffs) {
+    r.beforeAsset = copyAsset(beforeDir, beforeMap[r.url]?.screenshot, "before_");
+    r.afterAsset = copyAsset(afterDir, afterMap[r.url]?.screenshot, "after_");
+    r.diffAsset = copyAsset(diffDir, r.diffFilename, "");
+  }
+
   const newPages = diffResults.filter((r) => r.isNew);
   const removedPages = diffResults.filter((r) => r.isRemoved);
   const captureFailures = diffResults.filter((r) => r.captureFailed);
@@ -238,13 +273,9 @@ async function generateReport() {
     }
   }
 
-  // HTMLレポート生成
-  const reportPath = path.join(config.reportDir, "report.html");
-
-  // report.html は reportDir 直下、SS は reportDir/before|after|diff にあるので相対パスは "./"
-  const relBefore = "./before/screenshots/";
-  const relAfter = "./after/screenshots/";
-  const relDiff = "./diff/";
+  // HTMLレポート生成。report.html は assets/ と同じ report/ 配下に置くので
+  // 画像への相対パスは "./assets/..."（copyAsset の戻り値）。
+  const reportPath = path.join(reportOutDir, "report.html");
 
   const html = `<!DOCTYPE html>
 <html lang="ja">
@@ -359,16 +390,14 @@ async function generateReport() {
       const pct = r.diffRatio * 100;
       const cls = pct > 20 ? "high" : pct > 5 ? "mid" : "low";
       const isSignificant = r.changeLevel === "significant";
-      const bPage = beforeMap[r.url];
-      const aPage = afterMap[r.url];
       return `<tr class="${isSignificant ? "significant" : ""}">
         <td class="url"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a>${isSignificant ? ` <span class="tag review">要確認</span>` : ""}</td>
         <td><span class="diff-pct ${cls}">${toPercent(r.diffRatio)}</span> <span class="diff-px">${r.numDiff.toLocaleString()}px</span></td>
         <td>
           <div class="screenshots">
-            ${bPage?.screenshot ? `<div><a href="${relBefore}${escapeHtml(bPage.screenshot)}" target="_blank"><img src="${relBefore}${escapeHtml(bPage.screenshot)}" loading="lazy"></a><div class="cap">Before</div></div>` : ""}
-            ${aPage?.screenshot ? `<div><a href="${relAfter}${escapeHtml(aPage.screenshot)}" target="_blank"><img src="${relAfter}${escapeHtml(aPage.screenshot)}" loading="lazy"></a><div class="cap">After</div></div>` : ""}
-            ${r.diffFilename ? `<div><a href="${relDiff}${escapeHtml(r.diffFilename)}" target="_blank"><img src="${relDiff}${escapeHtml(r.diffFilename)}" loading="lazy"></a><div class="cap">Diff</div></div>` : ""}
+            ${r.beforeAsset ? `<div><a href="${r.beforeAsset}" target="_blank"><img src="${r.beforeAsset}" loading="lazy"></a><div class="cap">Before</div></div>` : ""}
+            ${r.afterAsset ? `<div><a href="${r.afterAsset}" target="_blank"><img src="${r.afterAsset}" loading="lazy"></a><div class="cap">After</div></div>` : ""}
+            ${r.diffAsset ? `<div><a href="${r.diffAsset}" target="_blank"><img src="${r.diffAsset}" loading="lazy"></a><div class="cap">Diff</div></div>` : ""}
           </div>
         </td>
       </tr>`;
@@ -461,7 +490,9 @@ async function generateReport() {
   console.log(`   リンク切れ      : ${uniqueBrokenLinks.length}件`);
   console.log(`   ステータス変化  : ${statusChanged.length}件`);
   console.log(`   撮影失敗・比較不能: ${captureFailures.length}件`);
-  console.log(`\n   レポート: ${reportPath}\n`);
+  console.log(`   納品用画像      : ${copiedAssets.size}枚 → ${assetsDir}`);
+  console.log(`\n   レポート: ${reportPath}`);
+  console.log(`   （クライアントには "${reportOutDir}" フォルダごと渡せば self-contained）\n`);
 }
 
 generateReport().catch((err) => {
