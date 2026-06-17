@@ -77,7 +77,8 @@ export const config = {
     //   name: "another",
     //   baseUrl: "https://another-staging.example.com",
     //   basicAuth: { username: "user", password: "pass" },
-    //   // concurrency: 1,  // ← この対象だけ上書きしたい場合
+    //   // concurrency: 1,              // ← この対象だけ上書きしたい場合
+    //   // blockResources: ["image"],   // ← 画像が多く遅い対象だけ画像スキップで高速化
     // },
   ],
 };

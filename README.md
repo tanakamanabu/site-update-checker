@@ -44,6 +44,18 @@ export const config = {
   // 共通設定
   concurrency: 2,   // 同時実行数（サーバー負荷を考えて1〜3推奨）
   diffThreshold: 0.01,
+
+  // スクショ前にCSSアニメーション/トランジションを無効化して最終状態を撮る
+  // （フェードイン演出の途中フレームを撮って誤差分になるのを防ぐ。通常 true 推奨）
+  disableAnimations: true,
+  screenshotDelay: 0,   // JS(rAF)駆動のフェードイン対策に追加待機(ms)。0で無効
+
+  // 指定種別のリソースを読み込まずブロックして高速化する（Playwrightの
+  // resourceType: "image" / "media" / "font" / "stylesheet" など）。
+  //   []          … 既定。全部読み込む（画像差分も検出できる）
+  //   ["image"]   … 画像を全スキップして最速化（画像の差分は捨てる）
+  // 画像が多く遅い対象だけ指定するのがおすすめ（targets[] 側で対象ごとに上書き可）
+  blockResources: [],
   // ...
 
   // チェック対象（複数定義可）
@@ -125,4 +137,5 @@ site-update-checker/
 - **Basic認証つきステージング環境**でも動きます（config.jsで設定）
 - `concurrency: 1` にするとサーバーへの負荷を最小限にできます
 - `diffThreshold: 0.01` を上げると微細な差分を無視できます
-- `reports/` ディレクトリは `.gitignore` に追加推奨（SSが大量に入るため）
+- **画像が多くてクロールが遅いとき**は `blockResources: ["image"]` で画像の読み込みをスキップして大幅に高速化できます（その分、画像の差分は検出されなくなります）。重い対象だけ `targets[]` 側で指定するのがおすすめです
+- **フェードイン等の演出で誤差分が出るとき**は、既定の `disableAnimations: true`（CSSアニメ/トランジションを無効化して最終状態を撮影）に加え、JS駆動の演出には `screenshotDelay: 300` のように撮影前の待機(ms)を足すと安定します
