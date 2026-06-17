@@ -36,6 +36,9 @@ const SHARED_KEYS = [
   "excludePatterns",
   "stayOnDomain",
   "userAgent",
+  "disableAnimations",
+  "screenshotDelay",
+  "blockResources",
 ];
 
 /**

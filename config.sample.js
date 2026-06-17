@@ -23,9 +23,30 @@ export const config = {
   // スクリーンショットのビューポートサイズ
   viewport: { width: 1280, height: 900 },
 
+  // スクショ前にCSSアニメーション/トランジションを無効化し最終状態へ飛ばす。
+  // フェードイン等の途中フレームを撮って before/after が誤差分になるのを防ぐ。
+  // 通常は true 推奨。アニメーション自体を差分として見たい場合のみ false。
+  disableAnimations: true,
+
+  // スクショ前の追加待機（ミリ秒）。CSS無効化では止まらない JS(rAF)駆動の
+  // フェードインがある場合に効く。0 で無効。重いサイトでは 300〜1000 程度。
+  screenshotDelay: 0,
+
+  // 指定種別のリソースを読み込まずブロックして高速化する（Playwrightの
+  // resourceType: "image" / "media" / "font" / "stylesheet" など）。
+  // 画像が多くクロールが遅い対象で効果大。ただしブロックした分はスクショに
+  // 写らないので差分検出もできなくなる（トレードオフ）。
+  //   []                 … 既定。全部読み込む（画像差分も検出できる）
+  //   ["image"]          … 画像も全スキップで最速。画像の差分は捨てる
+  //   ["media", "font"]  … 動画/フォントだけ落とし画像は残す（そこそこ高速）
+  // 対象ごとに上書き可（重いサイトだけ targets[] 側で指定するのが便利）。
+  blockResources: [],
+
   // クロール除外パターン（正規表現）
   excludePatterns: [
-    /\.(pdf|zip|jpg|jpeg|png|gif|svg|webp|mp4|mp3|woff|woff2|ttf|eot|ico)$/i,
+    // 拡張子の後ろにクエリ(?…)やフラグメント(#…)が付くURLも除外できるよう、
+    // 末尾固定($)ではなく ?・# が続くケースも許容する。
+    /\.(pdf|zip|jpg|jpeg|png|gif|svg|webp|mp4|mp3|woff|woff2|ttf|eot|ico)(\?|#|$)/i,
     /\/wp-admin\//,
     /\/wp-login\.php/,
     /\?replytocom=/,
