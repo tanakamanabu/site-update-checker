@@ -50,6 +50,57 @@ function writeResults(results, brokenLinks) {
   }
 }
 
+// スクショ前にページを安定化させる。フェードイン等のアニメーションは
+// networkidle 後に再生されるため、そのまま撮ると before/after で別々の
+// 中間フレームを撮ってしまい誤検出になる。対策として:
+//  1. CSS アニメーション/トランジションを無効化し最終状態へ飛ばす
+//  2. ページ全体をスクロールして IntersectionObserver 系の遅延表示を発火
+//  3. JS（rAF）駆動のフェードイン用に screenshotDelay だけ待つ
+async function stabilizePage(page, config) {
+  if (config.disableAnimations !== false) {
+    try {
+      await page.addStyleTag({
+        content: `
+          *, *::before, *::after {
+            animation-duration: 0s !important;
+            animation-delay: 0s !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0s !important;
+            transition-delay: 0s !important;
+            scroll-behavior: auto !important;
+          }
+        `,
+      });
+    } catch {
+      // about:blank 等でスタイル注入に失敗しても撮影自体は続行する
+    }
+  }
+
+  // 遅延表示を発火させるため最下部まで段階スクロールしてから先頭へ戻す
+  try {
+    await page.evaluate(async () => {
+      await new Promise((resolve) => {
+        const step = window.innerHeight || 800;
+        let y = 0;
+        const timer = setInterval(() => {
+          window.scrollTo(0, y);
+          y += step;
+          if (y >= document.body.scrollHeight) {
+            clearInterval(timer);
+            window.scrollTo(0, 0);
+            resolve();
+          }
+        }, 50);
+      });
+    });
+  } catch {
+    // スクロール失敗は無視（撮影は続行）
+  }
+
+  const delay = config.screenshotDelay ?? 0;
+  if (delay > 0) await page.waitForTimeout(delay);
+}
+
 async function crawl() {
   console.log(`\n🚀 クロール開始 [${config.name}/${phase}] - ${config.baseUrl}\n`);
 
@@ -60,6 +111,22 @@ async function crawl() {
     httpCredentials: config.basicAuth ?? undefined,
     ignoreHTTPSErrors: true,
   });
+
+  // 指定したリソース種別（image/media/font 等）をブロックして高速化する。
+  // 画像が多いサイトは networkidle 待ちがボトルネックになるため、画像差分が
+  // 不要な対象では blockResources:["image"] で大幅に短縮できる。
+  // 既定（空）なら従来通り全リソースを読み込んでスクショに反映する。
+  const blockResources = config.blockResources ?? [];
+  if (blockResources.length > 0) {
+    await context.route("**/*", (route) => {
+      if (blockResources.includes(route.request().resourceType())) {
+        route.abort().catch(() => route.continue().catch(() => {}));
+      } else {
+        route.continue().catch(() => {});
+      }
+    });
+    console.log(`   リソースブロック: ${blockResources.join(", ")}`);
+  }
 
   const visited = new Set();
   const queue = [config.baseUrl];
@@ -101,6 +168,8 @@ async function crawl() {
           const filename = urlToFilename(url) + ".png";
           const ssPath = path.join(ssDir, filename);
           try {
+            // フェードイン等の途中フレームを撮らないよう安定化させてから撮影
+            await stabilizePage(page, config);
             await page.screenshot({ path: ssPath, fullPage: true });
             result.screenshot = filename;
           } catch (ssErr) {
