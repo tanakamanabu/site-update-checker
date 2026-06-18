@@ -13,6 +13,7 @@ import {
   isExcluded,
   isCheckableHttpLink,
   isUniformBlackBand,
+  formatDateTime,
   escapeHtml,
   toPercent,
   detectMissingScreenshot,
@@ -164,6 +165,21 @@ test("isUniformBlackBand: 空の範囲・不正な幅は false", () => {
   const data = makeRGBA(4, 4, [0, 0, 0]);
   assert.equal(isUniformBlackBand(data, 4, 2, 2), false); // yStart==yEnd
   assert.equal(isUniformBlackBand(data, 0, 0, 4), false); // width 0
+});
+
+test("formatDateTime: ISO(UTC) を指定タイムゾーンのローカル表記に変換する", () => {
+  // 2026-06-18T01:33:33Z は JST(+9h) で 10:33:33
+  const s = formatDateTime("2026-06-18T01:33:33Z", { timeZone: "Asia/Tokyo" });
+  assert.match(s, /2026/);
+  assert.match(s, /10:33:33/);
+});
+
+test("formatDateTime: 空・不正値は安全に扱う", () => {
+  assert.equal(formatDateTime(null), "-");
+  assert.equal(formatDateTime(undefined), "-");
+  assert.equal(formatDateTime(""), "-");
+  // パース不能な文字列は元の値をそのまま返す
+  assert.equal(formatDateTime("not-a-date"), "not-a-date");
 });
 
 test("escapeHtml: HTML 特殊文字をエスケープする", () => {

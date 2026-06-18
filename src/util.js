@@ -104,6 +104,25 @@ export function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+// ISO 日時文字列（UTC）を人が読みやすいローカル表記に整形する。
+// results.json には機械可読な ISO(UTC) で保存し、レポート表示時にここで
+// JST 等へ変換する。パース不能なら元の値をそのまま返す（壊さない）。
+export function formatDateTime(iso, { locale = "ja-JP", timeZone = "Asia/Tokyo" } = {}) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(locale, {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
 // 比率（0〜1）をパーセント表記の文字列にする。
 export function toPercent(ratio) {
   return (ratio * 100).toFixed(2) + "%";

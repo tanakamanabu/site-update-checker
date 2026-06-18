@@ -18,6 +18,7 @@ import {
   detectMissingScreenshot,
   classifyVisualChange,
   isUniformBlackBand,
+  formatDateTime,
 } from "./util.js";
 
 const config = await resolveTarget(process.argv[2]);
@@ -194,6 +195,9 @@ function loadResults(filepath, phase) {
 async function generateReport() {
   console.log("\n🔍 差分レポート生成中...\n");
 
+  // レポート生成時刻
+  const generatedAt = new Date().toISOString();
+
   if (!fs.existsSync(beforeData) || !fs.existsSync(afterData)) {
     console.error("❌ before/after の results.json が見つかりません。先に crawl を実行してください。");
     process.exit(1);
@@ -333,6 +337,9 @@ async function generateReport() {
   header { background: #1a1d2e; border-bottom: 1px solid #2d3154; padding: 24px 32px; }
   header h1 { font-size: 1.5rem; font-weight: 700; color: #7c9ef8; }
   header .meta { color: #64748b; font-size: 0.85rem; margin-top: 6px; }
+  header .timing { margin-top: 10px; border-collapse: collapse; font-size: 0.8rem; color: #94a3b8; }
+  header .timing th { text-align: left; color: #64748b; font-weight: 600; padding: 2px 14px 2px 0; white-space: nowrap; }
+  header .timing td { padding: 2px 10px 2px 0; font-family: monospace; white-space: nowrap; }
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; padding: 24px 32px; }
   .stat { background: #1a1d2e; border: 1px solid #2d3154; border-radius: 10px; padding: 16px 20px; }
   .stat .num { font-size: 2rem; font-weight: 800; }
@@ -377,11 +384,12 @@ async function generateReport() {
 <body>
 <header>
   <h1>🔍 Site Update Checker</h1>
-  <div class="meta">
-    対象: ${escapeHtml(config.baseUrl)} &nbsp;|&nbsp;
-    Before: ${escapeHtml(before.crawledAt)} &nbsp;|&nbsp;
-    After: ${escapeHtml(after.crawledAt)}
-  </div>
+  <div class="meta">対象: ${escapeHtml(config.baseUrl)}</div>
+  <table class="timing">
+    <tr><th>Before クロール</th><td>${escapeHtml(formatDateTime(before.startedAt))}</td><td>→</td><td>${escapeHtml(formatDateTime(before.finishedAt ?? before.crawledAt))}</td></tr>
+    <tr><th>After クロール</th><td>${escapeHtml(formatDateTime(after.startedAt))}</td><td>→</td><td>${escapeHtml(formatDateTime(after.finishedAt ?? after.crawledAt))}</td></tr>
+    <tr><th>レポート作成</th><td colspan="3">${escapeHtml(formatDateTime(generatedAt))}</td></tr>
+  </table>
 </header>
 
 <div class="summary">

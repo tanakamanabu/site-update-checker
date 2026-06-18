@@ -33,13 +33,20 @@ const dataFile = path.join(config.reportDir, phase, "results.json");
 
 fs.mkdirSync(ssDir, { recursive: true });
 
+// クロール開始時刻。最初の書き込み前に一度だけ確定させる。
+const startedAt = new Date().toISOString();
+
 // 現在までの結果を results.json に書き出す。バッチごとと、最後（finally）に
 // 呼ぶことで、クロールが途中でクラッシュしても部分結果が残るようにする。
+// finishedAt は呼ぶたびに更新されるので、最後の書き込み＝クロール終了時刻になる。
 function writeResults(results, brokenLinks) {
+  const finishedAt = new Date().toISOString();
   const output = {
     phase,
     baseUrl: config.baseUrl,
-    crawledAt: new Date().toISOString(),
+    startedAt,
+    finishedAt,
+    crawledAt: finishedAt, // 後方互換（旧 results.json 読み込み側のため）
     totalPages: results.length,
     brokenLinks,
     pages: results,
