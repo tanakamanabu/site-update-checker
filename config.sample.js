@@ -32,6 +32,21 @@ export const config = {
   // フェードインがある場合に効く。0 で無効。重いサイトでは 300〜1000 程度。
   screenshotDelay: 0,
 
+  // スクショ前に非表示にする要素のCSSセレクタ配列（display:none !important）。
+  // カルーセル・広告枠・ランダム表示バナー・日時表示など、before/after で
+  // 中身が変わって誤差分を生む動的要素を撮影対象から外すのに使う。
+  //   []                          … 既定。何も隠さない
+  //   ["#wrapper .carousel"]      … 特定の動的領域だけ隠す
+  //   ["#ad", ".random-banner"]   … 複数指定可
+  // 要素を隠すとレイアウト（高さ）が before/after 共通で変わるだけなので
+  // 誤差分が消える。変更したら before/after を両方撮り直すこと。
+  hideSelectors: [],
+
+  // 上記 hideSelectors で足りない調整をしたい場合の生CSS文字列。撮影前に
+  // そのまま注入される（visibility 固定・位置固定・色固定など任意の上書き）。
+  // 例: "#wrapper { min-height: 0 !important; } .clock { visibility: hidden !important; }"
+  injectCSS: "",
+
   // 指定種別のリソースを読み込まずブロックして高速化する（Playwrightの
   // resourceType: "image" / "media" / "font" / "stylesheet" など）。
   // 画像が多くクロールが遅い対象で効果大。ただしブロックした分はスクショに
@@ -54,6 +69,15 @@ export const config = {
   // ブラウザの fetch 自体にはタイムアウトが無いため、応答しないリンクに
   // 当たると既定のネットワークタイムアウトまで固まる。これで上限を付ける。
   linkCheckTimeout: 8000,
+
+  // リンク切れチェックの同時実行数の上限（全ページ通算）。1ページ内の全リンクを
+  // 一斉に叩き、さらにページも concurrency 件並列なので、無制限だと瞬間同時
+  // リクエストが膨らみ対象サーバーに 429（レート制限）を出させやすい。この値で
+  // 同時 fetch を頭打ちにする。429 が出るなら下げる（例 3〜4）。既定 6。
+  // なお 429 は実際には生きているリンクなので、Retry-After を見て数回リトライし、
+  // それでも 429 ならリンク切れ（死亡）ではなく「要確認（レート制限）」として
+  // レポートに別枠表示する（誤計上しない）。
+  linkConcurrency: 6,
 
   // クロール除外パターン（正規表現）
   excludePatterns: [
