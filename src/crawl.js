@@ -17,6 +17,7 @@ import {
   isNetworkUnreachable,
   isSameDomain,
   isExcluded,
+  isCheckableHttpLink,
 } from "./util.js";
 
 const phase = process.argv[2];
@@ -97,8 +98,82 @@ async function stabilizePage(page, config) {
     // スクロール失敗は無視（撮影は続行）
   }
 
+  // fullPage スクショは「測定した scrollHeight」と「実際に paint された高さ」が
+  // 食い違うと、末尾の未描画分が純黒で埋まるアーティファクトを出す。直前の
+  // スクロールで遅延要素や 100vh/sticky が再計算され高さが揺れている最中だと
+  // 起きやすい。撮影前にドキュメント高さが連続して変わらなくなるまで待ち、
+  // 揺れが収まってから撮ることで末尾黒帯を防ぐ。
+  try {
+    await page.evaluate(async () => {
+      const getH = () =>
+        Math.max(
+          document.documentElement.scrollHeight,
+          document.body ? document.body.scrollHeight : 0
+        );
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+      let last = getH();
+      let stable = 0;
+      // 3 回連続で高さが変わらなければ安定とみなす。最大 ~2s（40×50ms）で打ち切り。
+      for (let i = 0; i < 40 && stable < 3; i++) {
+        await sleep(50);
+        await frame();
+        const h = getH();
+        if (h === last) {
+          stable++;
+        } else {
+          stable = 0;
+          last = h;
+        }
+      }
+    });
+  } catch {
+    // 高さ監視の失敗は無視（撮影は続行）
+  }
+
   const delay = config.screenshotDelay ?? 0;
   if (delay > 0) await page.waitForTimeout(delay);
+}
+
+// リンク先のHTTPステータスを確認する。ブラウザの fetch にはタイムアウトが
+// 無いため、応答しない外部ホスト（SNS共有リンク等）に当たると既定の
+// ネットワークタイムアウト（数十秒〜分）まで固まり、1ページの処理が極端に
+// 遅くなる。AbortController で timeoutMs 上限を付けて頭打ちにする。
+// 返り値: HTTPステータス（数値）/ fetch失敗は 0 / ページ消失等のNode側
+// エラーは null（リンク切れとして誤計上しないため呼び出し側でスキップ）。
+async function checkLinkStatus(page, href, timeoutMs) {
+  try {
+    return await page.evaluate(
+      async ({ href, timeoutMs }) => {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          let r = await fetch(href, {
+            method: "HEAD",
+            redirect: "follow",
+            signal: controller.signal,
+          });
+          // HEAD を許可しないサーバー（405/501）は GET で確認し直す。
+          if (r.status === 405 || r.status === 501) {
+            r = await fetch(href, {
+              method: "GET",
+              redirect: "follow",
+              signal: controller.signal,
+            });
+          }
+          return r.status;
+        } catch {
+          // タイムアウト中断・ネットワーク失敗・CORS 等は到達不可とみなす
+          return 0;
+        } finally {
+          clearTimeout(t);
+        }
+      },
+      { href, timeoutMs }
+    );
+  } catch {
+    return null; // page.close 済み等、リンクとは無関係な失敗
+  }
 }
 
 async function crawl() {
@@ -132,6 +207,14 @@ async function crawl() {
   const queue = [config.baseUrl];
   const results = []; // { url, status, screenshot, links, error }
   const brokenLinks = []; // { url, status, foundOn }
+
+  // リンク先のステータスを URL 単位でメモ化する。connpass/facebook/youtube 等の
+  // 外部リンクは全ページ共通でリンクされているため、毎ページ確認し直すと
+  // 1000 ページ規模では膨大な重複 fetch になる。一度確認した URL は再利用する。
+  const linkStatusCache = new Map();
+
+  const linkCheckTimeout = config.linkCheckTimeout ?? 8000;
+  const checkExternalLinks = config.checkExternalLinks !== false; // 既定 On
 
   let processed = 0;
 
@@ -184,43 +267,47 @@ async function crawl() {
               .filter(Boolean);
           });
 
-          // リンク切れチェック（ページ内リンクをfetchで確認）
           const uniqueLinks = [...new Set(links)];
+
+          // 同一ドメインのリンクは BFS キューへ追加（除外パターン適用）
           for (const link of uniqueLinks) {
             if (isExcluded(link, config.excludePatterns)) continue;
-
-            // 同一ドメインのリンクはキューに追加
             if (config.stayOnDomain && isSameDomain(link, config.baseUrl) && !visited.has(link)) {
               const normalized = link.split("#")[0].split("?")[0];
               if (!visited.has(normalized) && !queue.includes(normalized)) {
                 queue.push(normalized);
               }
             }
-
-            // リンク先のHTTPステータス確認
-            try {
-              const res = await page.evaluate(async (href) => {
-                try {
-                  let r = await fetch(href, { method: "HEAD", redirect: "follow" });
-                  // HEAD を許可しないサーバー（405/501）は GET で確認し直す。
-                  // HEAD 固定だと生きてるリンクを誤って「リンク切れ」と判定する。
-                  if (r.status === 405 || r.status === 501) {
-                    r = await fetch(href, { method: "GET", redirect: "follow" });
-                  }
-                  return r.status;
-                } catch {
-                  return 0;
-                }
-              }, link);
-
-              if (res === 0 || res >= 400) {
-                result.outboundBroken.push({ link, status: res });
-                brokenLinks.push({ url: link, status: res, foundOn: url });
-              }
-            } catch {
-              // fetch失敗は無視
-            }
           }
+
+          // リンク切れチェック対象を絞り込む:
+          //  - 除外パターン該当は対象外
+          //  - javascript:/mailto: 等の擬似リンク・不正ホストは対象外
+          //  - checkExternalLinks:false なら外部ドメインは確認しない（内部のみ）
+          const linksToCheck = uniqueLinks.filter((link) => {
+            if (isExcluded(link, config.excludePatterns)) return false;
+            if (!isCheckableHttpLink(link)) return false;
+            if (!checkExternalLinks && !isSameDomain(link, config.baseUrl)) return false;
+            return true;
+          });
+
+          // タイムアウト付きで並列に確認する。逐次（for await）だと1ページ内の
+          // リンク待ち時間が「合計」になり、応答しない外部リンクが数本あるだけで
+          // ページ処理が分単位で固まる。並列化で「最遅1本」に抑える。
+          await Promise.all(
+            linksToCheck.map(async (link) => {
+              let status = linkStatusCache.get(link);
+              if (status === undefined) {
+                status = await checkLinkStatus(page, link, linkCheckTimeout);
+                linkStatusCache.set(link, status);
+              }
+              // null（Node側エラー）はリンク切れに誤計上しないようスキップ
+              if (status !== null && (status === 0 || status >= 400)) {
+                result.outboundBroken.push({ link, status });
+                brokenLinks.push({ url: link, status, foundOn: url });
+              }
+            })
+          );
 
           processed++;
           const statusIcon = result.status < 400 ? "✅" : "❌";

@@ -39,6 +39,8 @@ const SHARED_KEYS = [
   "disableAnimations",
   "screenshotDelay",
   "blockResources",
+  "checkExternalLinks",
+  "linkCheckTimeout",
 ];
 
 /**
