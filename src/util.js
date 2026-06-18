@@ -51,6 +51,50 @@ export function isExcluded(url, patterns) {
   return (patterns ?? []).some((p) => p.test(url));
 }
 
+// fetch でステータス確認する価値のある http(s) リンクか判定する。
+// javascript:/mailto:/tel:/#... などの擬似リンクや、http://-/ のような
+// 不正ホストは確認しても必ず失敗（status 0）になるだけで、無駄に時間を食う
+// うえにリンク切れの誤検出も生む。確認対象から外すために使う。
+export function isCheckableHttpLink(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  // ホスト名が空、または "-" のみ等の明らかに不正なものを弾く
+  if (!u.hostname || u.hostname === "-") return false;
+  return true;
+}
+
+// fullPage スクショで時々出る「末尾の純黒帯」アーティファクト検出の中核。
+// data(RGBA 配列) の y=[yStart, yEnd) × 全幅が、ほぼ純黒で一様な帯かを判定する。
+// Chromium は「測定した scrollHeight」と「実際に paint した高さ」が食い違うと
+// 末尾の未描画分を純黒で埋めることがある。高い方の画像の余剰高さ領域がこれに
+// 該当し、かつ低い方は単なる余白なら、実コンテンツの変化ではなく描画
+// アーティファクトとみなして「要確認」から外すために使う。
+export function isUniformBlackBand(
+  data,
+  width,
+  yStart,
+  yEnd,
+  { maxLuma = 8, blackRatio = 0.999 } = {}
+) {
+  if (width <= 0 || yEnd <= yStart) return false;
+  let total = 0;
+  let black = 0;
+  for (let y = yStart; y < yEnd; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const luma = Math.max(data[i], data[i + 1], data[i + 2]);
+      total++;
+      if (luma <= maxLuma) black++;
+    }
+  }
+  return total > 0 && black / total >= blackRatio;
+}
+
 // HTML 出力用にエスケープする。
 export function escapeHtml(str) {
   return String(str)
@@ -58,6 +102,25 @@ export function escapeHtml(str) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+// ISO 日時文字列（UTC）を人が読みやすいローカル表記に整形する。
+// results.json には機械可読な ISO(UTC) で保存し、レポート表示時にここで
+// JST 等へ変換する。パース不能なら元の値をそのまま返す（壊さない）。
+export function formatDateTime(iso, { locale = "ja-JP", timeZone = "Asia/Tokyo" } = {}) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(locale, {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 // 比率（0〜1）をパーセント表記の文字列にする。

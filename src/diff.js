@@ -12,7 +12,14 @@ import path from "path";
 import { PNG } from "pngjs";
 import pixelmatch from "pixelmatch";
 import { resolveTarget } from "./target.js";
-import { escapeHtml, toPercent, detectMissingScreenshot, classifyVisualChange } from "./util.js";
+import {
+  escapeHtml,
+  toPercent,
+  detectMissingScreenshot,
+  classifyVisualChange,
+  isUniformBlackBand,
+  formatDateTime,
+} from "./util.js";
 
 const config = await resolveTarget(process.argv[2]);
 
@@ -94,6 +101,25 @@ function compareScreenshots(filename) {
     const width = Math.max(imgBefore.width, imgAfter.width);
     const height = Math.max(imgBefore.height, imgAfter.height);
 
+    // 高さが違う場合、「高い方だけにある末尾領域」が全幅・純黒の一様帯なら
+    // fullPage スクショのアーティファクト（末尾黒帯）とみなす。低い方は単なる
+    // 余白なので、この帯は実コンテンツの差ではない。差分から除外して別枠で扱う。
+    let artifact = null;
+    if (imgBefore.height !== imgAfter.height) {
+      const tallerIsAfter = imgAfter.height > imgBefore.height;
+      const taller = tallerIsAfter ? imgAfter : imgBefore;
+      const minH = Math.min(imgBefore.height, imgAfter.height);
+      // taller の幅が共通幅と一致する前提（viewport 固定なので通常一致する）
+      if (taller.width === width && isUniformBlackBand(taller.data, taller.width, minH, taller.height)) {
+        artifact = {
+          type: "bottom-black-band",
+          phase: tallerIsAfter ? "after" : "before",
+          bandHeight: taller.height - minH,
+          bandPx: (taller.height - minH) * width,
+        };
+      }
+    }
+
     if (imgBefore.width !== width || imgBefore.height !== height) {
       imgBefore = resizePNG(imgBefore, width, height);
     }
@@ -114,6 +140,12 @@ function compareScreenshots(filename) {
     const totalPixels = width * height;
     const diffRatio = numDiff / totalPixels;
 
+    // アーティファクト帯のぶんを差し引いた「実差分」。帯領域は白パディング vs
+    // 黒で必ず全画素 diff になるため bandPx を引く。これを分類・表示に使うことで
+    // 末尾黒帯で差分率が膨らんだり「要確認」に化けたりするのを防ぐ。
+    const realNumDiff = artifact ? Math.max(0, numDiff - artifact.bandPx) : numDiff;
+    const realDiffRatio = realNumDiff / totalPixels;
+
     // 1px でも違えば diff 画像を残す（取りこぼし防止）。閾値はあくまで
     // 「強調するか」の判定で、ここでは「変化があるか」だけを見る。
     if (numDiff > 0) {
@@ -122,10 +154,10 @@ function compareScreenshots(filename) {
         path.join(diffDir, diffFilename),
         PNG.sync.write(diffImg)
       );
-      return { diffRatio, diffFilename, numDiff, totalPixels };
+      return { diffRatio, diffFilename, numDiff, totalPixels, realNumDiff, realDiffRatio, artifact };
     }
 
-    return { diffRatio, diffFilename: null, numDiff, totalPixels };
+    return { diffRatio, diffFilename: null, numDiff, totalPixels, realNumDiff, realDiffRatio, artifact };
   } catch (err) {
     return { error: `画像比較失敗: ${err.message}` };
   }
@@ -163,6 +195,9 @@ function loadResults(filepath, phase) {
 async function generateReport() {
   console.log("\n🔍 差分レポート生成中...\n");
 
+  // レポート生成時刻
+  const generatedAt = new Date().toISOString();
+
   if (!fs.existsSync(beforeData) || !fs.existsSync(afterData)) {
     console.error("❌ before/after の results.json が見つかりません。先に crawl を実行してください。");
     process.exit(1);
@@ -195,7 +230,10 @@ async function generateReport() {
       isRemoved: !afterPage,
       diffRatio: 0,
       numDiff: 0,
+      rawNumDiff: 0,
       diffFilename: null,
+      // 末尾黒帯アーティファクト（自動判定）。検出時のみオブジェクトが入る。
+      artifact: null,
       hasBrokenLinks: (afterPage?.outboundBroken ?? []).length > 0,
       brokenLinks: afterPage?.outboundBroken ?? [],
       // 両フェーズにページは存在するのにスクショが欠落・比較不能なケース
@@ -211,8 +249,12 @@ async function generateReport() {
         entry.captureFailed = true;
         entry.captureNote = result.error;
       } else if (result) {
-        entry.diffRatio = result.diffRatio;
-        entry.numDiff = result.numDiff;
+        // 分類・表示はアーティファクト帯を除いた実差分で行う（黒帯で % が
+        // 膨らんだり「要確認」に化けたりしないように）。raw は参考に保持。
+        entry.diffRatio = result.realDiffRatio ?? result.diffRatio;
+        entry.numDiff = result.realNumDiff ?? result.numDiff;
+        entry.rawNumDiff = result.numDiff;
+        entry.artifact = result.artifact ?? null;
         entry.diffFilename = result.diffFilename;
       }
     } else {
@@ -244,11 +286,17 @@ async function generateReport() {
   // 閾値以上の「要確認」件数（サマリーで強調するため）
   const significantDiffs = visualDiffs.filter((r) => r.changeLevel === "significant");
 
+  // 末尾黒帯アーティファクト（自動判定）として検出されたページ。実差分は
+  // 帯を除いて分類済みなので、純粋な黒帯だけのページは visualDiffs に出ない。
+  // 人が後から確認できるよう別枠で一覧する（誤判定だった場合の保険）。
+  const artifactPages = diffResults.filter((r) => r.artifact);
+
   // 納品用 assets/ を作り直し（古い画像を残さない）、レポートで使う
   // before/after/diff 画像だけをコピーして相対パスを各エントリに付与する。
+  // ビジュアル差分とアーティファクト両方の画像を集約する（copyAsset は重複抑止）。
   fs.rmSync(assetsDir, { recursive: true, force: true });
   fs.mkdirSync(assetsDir, { recursive: true });
-  for (const r of visualDiffs) {
+  for (const r of [...visualDiffs, ...artifactPages]) {
     r.beforeAsset = copyAsset(beforeDir, beforeMap[r.url]?.screenshot, "before_");
     r.afterAsset = copyAsset(afterDir, afterMap[r.url]?.screenshot, "after_");
     r.diffAsset = copyAsset(diffDir, r.diffFilename, "");
@@ -289,6 +337,9 @@ async function generateReport() {
   header { background: #1a1d2e; border-bottom: 1px solid #2d3154; padding: 24px 32px; }
   header h1 { font-size: 1.5rem; font-weight: 700; color: #7c9ef8; }
   header .meta { color: #64748b; font-size: 0.85rem; margin-top: 6px; }
+  header .timing { margin-top: 10px; border-collapse: collapse; font-size: 0.8rem; color: #94a3b8; }
+  header .timing th { text-align: left; color: #64748b; font-weight: 600; padding: 2px 14px 2px 0; white-space: nowrap; }
+  header .timing td { padding: 2px 10px 2px 0; font-family: monospace; white-space: nowrap; }
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; padding: 24px 32px; }
   .stat { background: #1a1d2e; border: 1px solid #2d3154; border-radius: 10px; padding: 16px 20px; }
   .stat .num { font-size: 2rem; font-weight: 800; }
@@ -326,17 +377,19 @@ async function generateReport() {
   .tag { display: inline-block; font-size: 0.7rem; padding: 1px 6px; border-radius: 3px; }
   .tag.new { background: #1e3a5f; color: #60a5fa; }
   .tag.removed { background: #3b0f0f; color: #f87171; }
+  .tag.artifact { background: #1f2937; color: #9ca3af; }
   .empty { color: #475569; font-style: italic; padding: 20px 0; text-align: center; }
 </style>
 </head>
 <body>
 <header>
   <h1>🔍 Site Update Checker</h1>
-  <div class="meta">
-    対象: ${escapeHtml(config.baseUrl)} &nbsp;|&nbsp;
-    Before: ${escapeHtml(before.crawledAt)} &nbsp;|&nbsp;
-    After: ${escapeHtml(after.crawledAt)}
-  </div>
+  <div class="meta">対象: ${escapeHtml(config.baseUrl)}</div>
+  <table class="timing">
+    <tr><th>Before クロール</th><td>${escapeHtml(formatDateTime(before.startedAt))}</td><td>→</td><td>${escapeHtml(formatDateTime(before.finishedAt ?? before.crawledAt))}</td></tr>
+    <tr><th>After クロール</th><td>${escapeHtml(formatDateTime(after.startedAt))}</td><td>→</td><td>${escapeHtml(formatDateTime(after.finishedAt ?? after.crawledAt))}</td></tr>
+    <tr><th>レポート作成</th><td colspan="3">${escapeHtml(formatDateTime(generatedAt))}</td></tr>
+  </table>
 </header>
 
 <div class="summary">
@@ -359,6 +412,10 @@ async function generateReport() {
   <div class="stat ${captureFailures.length > 0 ? "danger" : "ok"}">
     <div class="num">${captureFailures.length}</div>
     <div class="label">撮影失敗・比較不能</div>
+  </div>
+  <div class="stat ${artifactPages.length > 0 ? "warn" : "ok"}">
+    <div class="num">${artifactPages.length}</div>
+    <div class="label">末尾黒帯（自動補正）</div>
   </div>
   <div class="stat info">
     <div class="num">${newPages.length}</div>
@@ -391,7 +448,7 @@ async function generateReport() {
       const cls = pct > 20 ? "high" : pct > 5 ? "mid" : "low";
       const isSignificant = r.changeLevel === "significant";
       return `<tr class="${isSignificant ? "significant" : ""}">
-        <td class="url"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a>${isSignificant ? ` <span class="tag review">要確認</span>` : ""}</td>
+        <td class="url"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a>${isSignificant ? ` <span class="tag review">要確認</span>` : ""}${r.artifact ? ` <span class="tag artifact">末尾黒帯補正</span>` : ""}</td>
         <td><span class="diff-pct ${cls}">${toPercent(r.diffRatio)}</span> <span class="diff-px">${r.numDiff.toLocaleString()}px</span></td>
         <td>
           <div class="screenshots">
@@ -439,6 +496,31 @@ async function generateReport() {
         <td>${escapeHtml(r.captureNote ?? "")}</td>
       </tr>`;
     }).join("")}
+    </tbody></table>`}
+
+  <!-- 末尾黒帯アーティファクト（自動補正） -->
+  <h2>🩹 末尾黒帯アーティファクト（自動補正） <span class="badge">${artifactPages.length}件</span></h2>
+  ${artifactPages.length === 0
+    ? `<div class="empty">なし ✅</div>`
+    : `<div class="empty" style="text-align:left;font-style:normal;color:#94a3b8;padding:0 0 12px">
+       fullPage スクショで「測定した高さ」と「実際に描画された高さ」が食い違うと末尾が純黒で埋まることがあります（実コンテンツの差ではありません）。
+       この帯は差分計算から自動的に除外済みです。念のため一覧します（誤判定でないか確認用）。
+     </div>
+     <table>
+    <thead><tr><th>URL</th><th>黒帯</th><th>除外後の実差分</th><th>スクリーンショット比較</th></tr></thead>
+    <tbody>
+    ${artifactPages.map((r) => `<tr>
+      <td class="url"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a></td>
+      <td>${escapeHtml(String(r.artifact.phase))} 末尾 ${r.artifact.bandHeight}px</td>
+      <td><span class="diff-px">${r.numDiff.toLocaleString()}px（${toPercent(r.diffRatio)}）</span></td>
+      <td>
+        <div class="screenshots">
+          ${r.beforeAsset ? `<div><a href="${r.beforeAsset}" target="_blank"><img src="${r.beforeAsset}" loading="lazy"></a><div class="cap">Before</div></div>` : ""}
+          ${r.afterAsset ? `<div><a href="${r.afterAsset}" target="_blank"><img src="${r.afterAsset}" loading="lazy"></a><div class="cap">After</div></div>` : ""}
+          ${r.diffAsset ? `<div><a href="${r.diffAsset}" target="_blank"><img src="${r.diffAsset}" loading="lazy"></a><div class="cap">Diff</div></div>` : ""}
+        </div>
+      </td>
+    </tr>`).join("")}
     </tbody></table>`}
 
   <!-- ステータス変化 -->
@@ -490,6 +572,7 @@ async function generateReport() {
   console.log(`   リンク切れ      : ${uniqueBrokenLinks.length}件`);
   console.log(`   ステータス変化  : ${statusChanged.length}件`);
   console.log(`   撮影失敗・比較不能: ${captureFailures.length}件`);
+  console.log(`   末尾黒帯補正    : ${artifactPages.length}件`);
   console.log(`   納品用画像      : ${copiedAssets.size}枚 → ${assetsDir}`);
   console.log(`\n   レポート: ${reportPath}`);
   console.log(`   （クライアントには "${reportOutDir}" フォルダごと渡せば self-contained）\n`);

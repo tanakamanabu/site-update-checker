@@ -11,6 +11,9 @@ import {
   isNetworkUnreachable,
   isSameDomain,
   isExcluded,
+  isCheckableHttpLink,
+  isUniformBlackBand,
+  formatDateTime,
   escapeHtml,
   toPercent,
   detectMissingScreenshot,
@@ -90,6 +93,93 @@ test("isExcluded: いずれかの正規表現に一致したら true", () => {
 test("isExcluded: パターン未指定なら常に false", () => {
   assert.equal(isExcluded("https://x/page", undefined), false);
   assert.equal(isExcluded("https://x/page", []), false);
+});
+
+test("isCheckableHttpLink: http(s) の正常な URL のみ true", () => {
+  assert.equal(isCheckableHttpLink("https://example.com/a"), true);
+  assert.equal(isCheckableHttpLink("http://example.com"), true);
+});
+
+test("isCheckableHttpLink: 擬似リンク・非http スキームは false", () => {
+  assert.equal(isCheckableHttpLink("javascript:void(0)"), false);
+  assert.equal(isCheckableHttpLink("javascript:void(0);"), false);
+  assert.equal(isCheckableHttpLink("mailto:a@example.com"), false);
+  assert.equal(isCheckableHttpLink("tel:0312345678"), false);
+  assert.equal(isCheckableHttpLink("#section"), false);
+  assert.equal(isCheckableHttpLink("data:text/plain,hi"), false);
+});
+
+test("isCheckableHttpLink: 不正ホスト・パース不能は false", () => {
+  assert.equal(isCheckableHttpLink("http://-/"), false);
+  assert.equal(isCheckableHttpLink("not a url"), false);
+  assert.equal(isCheckableHttpLink(""), false);
+});
+
+// RGBA バッファを作るヘルパー: width×height を fill 色で塗り、
+// rows[y] に色指定があればその行を上書きする。色は [r,g,b]。
+function makeRGBA(width, height, fill, rows = {}) {
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const c = rows[y] ?? fill;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      data[i] = c[0];
+      data[i + 1] = c[1];
+      data[i + 2] = c[2];
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+test("isUniformBlackBand: 全幅・純黒の帯を検出する", () => {
+  const w = 10, h = 6;
+  // y=4,5 を黒帯、それ以外は白
+  const data = makeRGBA(w, h, [255, 255, 255], { 4: [0, 0, 0], 5: [0, 0, 0] });
+  assert.equal(isUniformBlackBand(data, w, 4, 6), true);
+});
+
+test("isUniformBlackBand: 白い領域は黒帯ではない", () => {
+  const w = 10, h = 6;
+  const data = makeRGBA(w, h, [255, 255, 255]);
+  assert.equal(isUniformBlackBand(data, w, 4, 6), false);
+});
+
+test("isUniformBlackBand: 実コンテンツ（非黒）が混じる帯は検出しない", () => {
+  const w = 10, h = 6;
+  // y=4 は黒だが y=5 は灰色（実コンテンツ相当）→ 純黒帯ではない
+  const data = makeRGBA(w, h, [255, 255, 255], { 4: [0, 0, 0], 5: [120, 120, 120] });
+  assert.equal(isUniformBlackBand(data, w, 4, 6), false);
+});
+
+test("isUniformBlackBand: ごく僅かなノイズは許容する（blackRatio 既定 0.999 未満で false）", () => {
+  const w = 100, h = 2;
+  const data = makeRGBA(w, h, [0, 0, 0]); // 200px 全黒
+  data[0] = 255; // 1px だけ白に（黒率 199/200 = 0.995 < 0.999）
+  assert.equal(isUniformBlackBand(data, w, 0, 2), false);
+  // 閾値を緩めれば許容される
+  assert.equal(isUniformBlackBand(data, w, 0, 2, { blackRatio: 0.99 }), true);
+});
+
+test("isUniformBlackBand: 空の範囲・不正な幅は false", () => {
+  const data = makeRGBA(4, 4, [0, 0, 0]);
+  assert.equal(isUniformBlackBand(data, 4, 2, 2), false); // yStart==yEnd
+  assert.equal(isUniformBlackBand(data, 0, 0, 4), false); // width 0
+});
+
+test("formatDateTime: ISO(UTC) を指定タイムゾーンのローカル表記に変換する", () => {
+  // 2026-06-18T01:33:33Z は JST(+9h) で 10:33:33
+  const s = formatDateTime("2026-06-18T01:33:33Z", { timeZone: "Asia/Tokyo" });
+  assert.match(s, /2026/);
+  assert.match(s, /10:33:33/);
+});
+
+test("formatDateTime: 空・不正値は安全に扱う", () => {
+  assert.equal(formatDateTime(null), "-");
+  assert.equal(formatDateTime(undefined), "-");
+  assert.equal(formatDateTime(""), "-");
+  // パース不能な文字列は元の値をそのまま返す
+  assert.equal(formatDateTime("not-a-date"), "not-a-date");
 });
 
 test("escapeHtml: HTML 特殊文字をエスケープする", () => {
