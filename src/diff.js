@@ -321,6 +321,19 @@ async function generateReport() {
     }
   }
 
+  // 429（レート制限）で確認しきれなかったリンク（重複排除）。死亡確定では
+  // ないので「リンク切れ」とは分け、要確認として別枠で出す（旧 json には
+  // rateLimited が無いので ?? [] でフォールバック）。
+  const allRateLimited = after.rateLimited ?? [];
+  const uniqueRateLimited = [];
+  const seenRateLimited = new Set();
+  for (const b of allRateLimited) {
+    if (!seenRateLimited.has(b.url)) {
+      seenRateLimited.add(b.url);
+      uniqueRateLimited.push(b);
+    }
+  }
+
   // HTMLレポート生成。report.html は assets/ と同じ report/ 配下に置くので
   // 画像への相対パスは "./assets/..."（copyAsset の戻り値）。
   const reportPath = path.join(reportOutDir, "report.html");
@@ -379,6 +392,8 @@ async function generateReport() {
   .tag.removed { background: #3b0f0f; color: #f87171; }
   .tag.artifact { background: #1f2937; color: #9ca3af; }
   .empty { color: #475569; font-style: italic; padding: 20px 0; text-align: center; }
+  .note { color: #94a3b8; font-size: 0.85rem; margin: 4px 0 12px; line-height: 1.5; }
+  .note code { background: #1e293b; padding: 1px 5px; border-radius: 3px; color: #e2e8f0; }
 </style>
 </head>
 <body>
@@ -404,6 +419,10 @@ async function generateReport() {
   <div class="stat ${uniqueBrokenLinks.length > 0 ? "danger" : "ok"}">
     <div class="num">${uniqueBrokenLinks.length}</div>
     <div class="label">リンク切れ（ユニーク）</div>
+  </div>
+  <div class="stat ${uniqueRateLimited.length > 0 ? "warn" : "ok"}">
+    <div class="num">${uniqueRateLimited.length}</div>
+    <div class="label">レート制限429（要確認）</div>
   </div>
   <div class="stat ${statusChanged.length > 0 ? "warn" : "ok"}">
     <div class="num">${statusChanged.length}</div>
@@ -475,6 +494,25 @@ async function generateReport() {
     ${uniqueBrokenLinks.map((b) => `<tr>
       <td class="url">${escapeHtml(b.url)}</td>
       <td><span class="status err">${escapeHtml(String(b.status || "接続不可"))}</span></td>
+      <td class="url"><a href="${escapeHtml(b.foundOn)}" target="_blank">${escapeHtml(b.foundOn)}</a></td>
+    </tr>`).join("")}
+    </tbody></table>`}
+
+  <!-- レート制限（429）: 死亡確定ではないので要確認として別枠表示 -->
+  <h2>⏳ レート制限で確認できなかったリンク（429・要確認） <span class="badge">${uniqueRateLimited.length}件</span></h2>
+  ${uniqueRateLimited.length === 0
+    ? `<div class="empty">なし ✅</div>`
+    : `<p class="note">サーバーのレート制限（429 Too Many Requests）でステータスを確定できなかったリンク。リンク切れとは限らないので個別に確認してください。多発する場合は config の <code>linkConcurrency</code> を下げてください。</p>
+    <table>
+    <thead><tr>
+      <th>リンクURL</th>
+      <th>ステータス</th>
+      <th>発見したページ</th>
+    </tr></thead>
+    <tbody>
+    ${uniqueRateLimited.map((b) => `<tr>
+      <td class="url">${escapeHtml(b.url)}</td>
+      <td><span class="status warn">${escapeHtml(String(b.status))}</span></td>
       <td class="url"><a href="${escapeHtml(b.foundOn)}" target="_blank">${escapeHtml(b.foundOn)}</a></td>
     </tr>`).join("")}
     </tbody></table>`}
@@ -570,6 +608,9 @@ async function generateReport() {
   console.log("📊 レポート生成完了！");
   console.log(`   ビジュアル差分  : ${visualDiffs.length}件（うち要確認 ${significantDiffs.length}件）`);
   console.log(`   リンク切れ      : ${uniqueBrokenLinks.length}件`);
+  if (uniqueRateLimited.length > 0) {
+    console.log(`   レート制限429   : ${uniqueRateLimited.length}件（要確認・死亡扱いせず）`);
+  }
   console.log(`   ステータス変化  : ${statusChanged.length}件`);
   console.log(`   撮影失敗・比較不能: ${captureFailures.length}件`);
   console.log(`   末尾黒帯補正    : ${artifactPages.length}件`);

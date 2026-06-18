@@ -39,7 +39,7 @@ const startedAt = new Date().toISOString();
 // 現在までの結果を results.json に書き出す。バッチごとと、最後（finally）に
 // 呼ぶことで、クロールが途中でクラッシュしても部分結果が残るようにする。
 // finishedAt は呼ぶたびに更新されるので、最後の書き込み＝クロール終了時刻になる。
-function writeResults(results, brokenLinks) {
+function writeResults(results, brokenLinks, rateLimited = []) {
   const finishedAt = new Date().toISOString();
   const output = {
     phase,
@@ -49,6 +49,7 @@ function writeResults(results, brokenLinks) {
     crawledAt: finishedAt, // 後方互換（旧 results.json 読み込み側のため）
     totalPages: results.length,
     brokenLinks,
+    rateLimited,
     pages: results,
   };
   try {
@@ -81,6 +82,28 @@ async function stabilizePage(page, config) {
       });
     } catch {
       // about:blank 等でスタイル注入に失敗しても撮影自体は続行する
+    }
+  }
+
+  // 動的要素（カルーセル・広告・ランダム表示・#wrapper 内の演出等）が
+  // before/after で別フレームになり誤差分を出す対象向けに、撮影前に
+  // 任意のCSSを注入して特定要素を非表示（や固定）にできる。
+  //  - hideSelectors: 非表示にしたいセレクタの配列 → display:none !important
+  //  - injectCSS:     上記で足りない場合の生CSS文字列（任意の上書き）
+  // この注入はスクロール／高さ安定待ちの前に行い、要素を消した後の高さで
+  // fullPage スクショが安定するようにする。
+  const hideSelectors = config.hideSelectors ?? [];
+  const injectCSS = config.injectCSS ?? "";
+  if (hideSelectors.length > 0 || injectCSS) {
+    let content = "";
+    if (hideSelectors.length > 0) {
+      content += `${hideSelectors.join(", ")} { display: none !important; }\n`;
+    }
+    if (injectCSS) content += injectCSS;
+    try {
+      await page.addStyleTag({ content });
+    } catch {
+      // 注入失敗（about:blank 等）でも撮影は続行する
     }
   }
 
@@ -152,28 +175,48 @@ async function checkLinkStatus(page, href, timeoutMs) {
   try {
     return await page.evaluate(
       async ({ href, timeoutMs }) => {
-        const controller = new AbortController();
-        const t = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          let r = await fetch(href, {
-            method: "HEAD",
-            redirect: "follow",
-            signal: controller.signal,
-          });
-          // HEAD を許可しないサーバー（405/501）は GET で確認し直す。
-          if (r.status === 405 || r.status === 501) {
-            r = await fetch(href, {
-              method: "GET",
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        // 1回分の fetch（メソッド指定）。timeoutMs で AbortController 中断する。
+        const doFetch = async (method) => {
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            return await fetch(href, {
+              method,
               redirect: "follow",
               signal: controller.signal,
             });
+          } finally {
+            clearTimeout(t);
+          }
+        };
+        try {
+          let r = await doFetch("HEAD");
+          // HEAD を許可しないサーバー（405/501）は GET で確認し直す。
+          if (r.status === 405 || r.status === 501) {
+            r = await doFetch("GET");
+          }
+          // 429（Too Many Requests）はリンク切れではなくレート制限。実際には
+          // 生きているので、Retry-After を尊重して数回だけ待って再試行する。
+          // 最後まで 429 のままなら呼び出し側で「死亡」扱いにせず「要確認
+          // （レート制限）」へ振り分ける。
+          let attempts = 0;
+          while (r.status === 429 && attempts < 2) {
+            attempts++;
+            const ra = parseInt(r.headers.get("retry-after"), 10);
+            // Retry-After（秒）が取れればそれに従い、無ければ指数的に待つ。
+            // 1本のチェックが長引きすぎないよう上限 5s でクランプ。
+            const waitMs = Math.min(
+              Number.isFinite(ra) ? ra * 1000 : 1000 * attempts,
+              5000
+            );
+            await sleep(waitMs);
+            r = await doFetch("GET");
           }
           return r.status;
         } catch {
           // タイムアウト中断・ネットワーク失敗・CORS 等は到達不可とみなす
           return 0;
-        } finally {
-          clearTimeout(t);
         }
       },
       { href, timeoutMs }
@@ -181,6 +224,29 @@ async function checkLinkStatus(page, href, timeoutMs) {
   } catch {
     return null; // page.close 済み等、リンクとは無関係な失敗
   }
+}
+
+// 同時実行数に上限を付ける軽量リミッタ（外部依存なし）。max 件まで並行で
+// 走らせ、超過分はキューに積んで空きが出たら順に実行する。リンク切れ
+// チェックの瞬間同時リクエスト数を抑え、対象サーバーの 429（レート制限）を
+// 防ぐために使う。
+function createLimiter(max) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= max || queue.length === 0) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    fn().then(resolve, reject).finally(() => {
+      active--;
+      next();
+    });
+  };
+  return (fn) =>
+    new Promise((resolve, reject) => {
+      queue.push({ fn, resolve, reject });
+      next();
+    });
 }
 
 async function crawl() {
@@ -214,14 +280,24 @@ async function crawl() {
   const queue = [config.baseUrl];
   const results = []; // { url, status, screenshot, links, error }
   const brokenLinks = []; // { url, status, foundOn }
+  const rateLimited = []; // { url, status, foundOn } 429（要確認・死亡扱いしない）
 
   // リンク先のステータスを URL 単位でメモ化する。connpass/facebook/youtube 等の
   // 外部リンクは全ページ共通でリンクされているため、毎ページ確認し直すと
-  // 1000 ページ規模では膨大な重複 fetch になる。一度確認した URL は再利用する。
+  // 1000 ページ規模では膨大な重複 fetch になる。値ではなく「確認中の Promise」を
+  // 入れることで、複数ページが同じ URL を同時に確認し始めても fetch は1回に
+  // 集約される（結果だけ入れると確認完了までの間にレースで重複 fetch が走る）。
   const linkStatusCache = new Map();
 
   const linkCheckTimeout = config.linkCheckTimeout ?? 8000;
   const checkExternalLinks = config.checkExternalLinks !== false; // 既定 On
+
+  // リンク切れチェックの同時実行数の上限。従来は 1ページ内の全リンクを
+  // Promise.all で一斉に叩き、さらにページ自体も concurrency 件並列だったため
+  // 瞬間同時リクエストが (concurrency × ページ内リンク数) まで膨らみ、対象
+  // サーバーに 429（レート制限）を出させていた。全ページ共有のリミッタで
+  // 同時 fetch を linkConcurrency 件に頭打ちにする。
+  const linkLimit = createLimiter(config.linkConcurrency ?? 6);
 
   let processed = 0;
 
@@ -239,6 +315,7 @@ async function crawl() {
           status: null,
           screenshot: null,
           outboundBroken: [],
+          outboundRateLimited: [],
           error: null,
         };
 
@@ -303,13 +380,23 @@ async function crawl() {
           // ページ処理が分単位で固まる。並列化で「最遅1本」に抑える。
           await Promise.all(
             linksToCheck.map(async (link) => {
-              let status = linkStatusCache.get(link);
-              if (status === undefined) {
-                status = await checkLinkStatus(page, link, linkCheckTimeout);
-                linkStatusCache.set(link, status);
+              // キャッシュには Promise を入れる（同一 URL の同時確認を1回に集約）。
+              // 実際の fetch は linkLimit を通すことで全ページ通算の同時数を頭打ち。
+              let statusPromise = linkStatusCache.get(link);
+              if (statusPromise === undefined) {
+                statusPromise = linkLimit(() =>
+                  checkLinkStatus(page, link, linkCheckTimeout)
+                );
+                linkStatusCache.set(link, statusPromise);
               }
+              const status = await statusPromise;
               // null（Node側エラー）はリンク切れに誤計上しないようスキップ
-              if (status !== null && (status === 0 || status >= 400)) {
+              if (status === null) return;
+              // 429 はレート制限。リトライしても 429 なら死亡扱いせず「要確認」へ。
+              if (status === 429) {
+                result.outboundRateLimited.push({ link, status });
+                rateLimited.push({ url: link, status, foundOn: url });
+              } else if (status === 0 || status >= 400) {
                 result.outboundBroken.push({ link, status });
                 brokenLinks.push({ url: link, status, foundOn: url });
               }
@@ -344,12 +431,12 @@ async function crawl() {
     );
 
       // バッチ完了ごとに逐次保存（途中クラッシュでも部分結果を残す）
-      writeResults(results, brokenLinks);
+      writeResults(results, brokenLinks, rateLimited);
     }
   } finally {
     await browser.close().catch(() => {});
     // 正常終了でもクラッシュ時でも、最終結果を確実に書き出す
-    writeResults(results, brokenLinks);
+    writeResults(results, brokenLinks, rateLimited);
   }
 
   // サマリー表示
@@ -362,6 +449,9 @@ async function crawl() {
     console.log(`     うち到達不可: ${unreachable.length}（ネットワーク/DNS）`);
   }
   console.log(`   リンク切れ    : ${brokenLinks.length}`);
+  if (rateLimited.length > 0) {
+    console.log(`   レート制限(429): ${rateLimited.length}（要確認・死亡扱いせず）`);
+  }
   console.log(`   結果保存先    : ${dataFile}\n`);
 }
 

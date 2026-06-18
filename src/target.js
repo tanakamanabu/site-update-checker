@@ -38,9 +38,12 @@ const SHARED_KEYS = [
   "userAgent",
   "disableAnimations",
   "screenshotDelay",
+  "hideSelectors",
+  "injectCSS",
   "blockResources",
   "checkExternalLinks",
   "linkCheckTimeout",
+  "linkConcurrency",
 ];
 
 /**
